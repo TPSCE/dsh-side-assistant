@@ -52,15 +52,6 @@ dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk/archive/ref
 Refresh the page afterwards; if the button does not appear, restart `dsh web`
 (the Host half's new routes need a fresh process).
 
-To iterate on local code, install this directory instead (same code, no network).
-The path contains a space — **quote it**:
-
-```sh
-dsh plugin --profile web add "/Users/a123/Desktop/small talk/dsh-side-assistant"
-```
-
-You can also install from the plugin page of the Web UI: paste the repository URL,
-or pick this local directory.
 
 Uninstall:
 
