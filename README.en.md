@@ -1,4 +1,4 @@
-# dsh-side-assistant
+# dsh-small-talk
 
 English · [中文](README.md) · [Repository](https://github.com/TPSCE/dsh-small-talk) · [AGPL-3.0](LICENSE)
 
