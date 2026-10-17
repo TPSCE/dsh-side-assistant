@@ -1,0 +1,9 @@
+# One row mounts both halves: the Host half (`index.js`) registers the
+# `/side-assistant/ensure` route, and the browser half (`client.js`) adds the
+# conversation-header button. `config` is passed straight to `apply(ctx, config)`
+# and every key below is optional — omit a key to take its built-in default.
+- insert:
+    - id: side-assistant
+      name: dsh-side-assistant
+      config:
+        label: 侧边助手
