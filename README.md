@@ -1,6 +1,6 @@
 # dsh-side-assistant
 
-[English](README.en.md) · 中文
+[English](README.en.md) · 中文 · [仓库](https://github.com/TPSCE/dsh-small-talk) · [AGPL-3.0](LICENSE)
 
 给当前会话一键开一个**常驻侧边助手**：它知道这个会话此前聊了什么（以一段压缩摘要的形式，不进它的聊天记录），
 可以反复追问，不会打断主任务；
@@ -53,15 +53,27 @@
 
 ## 安装
 
-profile 是 `web` 的话：
+profile 是 `web` 的话，直接从仓库安装：
+
+```sh
+dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk.git
+```
+
+不想让 pnpm 走 `git clone`（网络慢、或者本机没装 git）就用 tarball，一次 HTTPS 下载：
+
+```sh
+dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk/archive/refs/heads/main.tar.gz
+```
+
+装完刷新页面；如果按钮没出现，重启 `dsh web`（Host 半区的新路由需要重新加载进程）。
+
+改本地代码时可以改装这个目录（装的是同一份代码，只是绕过网络）。路径含空格，**务必加引号**：
 
 ```sh
 dsh plugin --profile web add "/Users/a123/Desktop/small talk/dsh-side-assistant"
 ```
 
-路径含空格，**务必加引号**。装完刷新页面；如果按钮没出现，重启 `dsh web`（Host 半区的新路由需要重新加载进程）。
-
-也可以从 Web 界面的插件页安装这个本地目录。
+也可以从 Web 界面的插件页安装：粘贴仓库地址，或选这个本地目录。
 
 卸载：
 

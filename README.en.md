@@ -1,6 +1,6 @@
 # dsh-side-assistant
 
-English · [中文](README.md)
+English · [中文](README.md) · [Repository](https://github.com/TPSCE/dsh-small-talk) · [AGPL-3.0](LICENSE)
 
 One press opens a **resident side assistant** for the current Session: it knows what this conversation has covered so far (as a compressed summary handed to it as prompt text — nothing of it shows up in its own chat log), you can keep asking it questions without interrupting the main task, and the top of the pane carries a **live progress strip** that folds into a single line — you see what the main Agent is doing and the newest thought at a glance, and unfolding it replays the last few steps of its chain of thought.
 
@@ -36,15 +36,31 @@ A side assistant **is not a subagent**: it never appears in the subagent catalog
 
 ## Install
 
-For a `web` profile:
+For a `web` profile, install straight from the repository:
+
+```sh
+dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk.git
+```
+
+If you would rather not have pnpm run `git clone` (slow network, or no git on the
+machine), use the tarball — a single HTTPS download:
+
+```sh
+dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk/archive/refs/heads/main.tar.gz
+```
+
+Refresh the page afterwards; if the button does not appear, restart `dsh web`
+(the Host half's new routes need a fresh process).
+
+To iterate on local code, install this directory instead (same code, no network).
+The path contains a space — **quote it**:
 
 ```sh
 dsh plugin --profile web add "/Users/a123/Desktop/small talk/dsh-side-assistant"
 ```
 
-The path contains a space — **quote it**. Refresh the page afterwards; if the button does not appear, restart `dsh web` (the Host half's new routes need a fresh process).
-
-You can also install this local directory from the plugin page of the Web UI.
+You can also install from the plugin page of the Web UI: paste the repository URL,
+or pick this local directory.
 
 Uninstall:
 
