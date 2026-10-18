@@ -1,5 +1,5 @@
 /**
- * Browser-half smoke test for `dsh-side-assistant`.
+ * Browser-half smoke test for `side-assistant`.
  *
  * Stubs the module loader, React, DOM and fetch, then runs the real factory and
  * the real `apply()`. It verifies the things that silently break a UI plugin:
@@ -274,17 +274,23 @@ test('styles, trim, dictionaries, the panel and the header action are effects', 
   assert.deepEqual(mounted.effects, [
     'side-assistant: styles',
     'side-assistant: sidebar trim',
+    'side-assistant: settings styles',
     'side-assistant: dictionaries',
     'side-assistant: chat resource',
     'side-assistant: chat tab type',
     'side-assistant: chat tab body',
     'side-assistant: suggestion cards',
     'side-assistant: header action',
+    'side-assistant: settings page',
   ])
-  assert.equal(styleTags.length, 2)
+  assert.equal(styleTags.length, 3)
   assert.deepEqual(
     styleTags.map((tag) => tag.dataset.pluginCss),
-    ['dsh-side-assistant/action.css', 'dsh-side-assistant/sidebar-chat.css'],
+    [
+      'side-assistant/action.css',
+      'side-assistant/sidebar-chat.css',
+      'side-assistant/settings.css',
+    ],
   )
 })
 
@@ -295,12 +301,13 @@ test('the panel services are requested separately from the required ones', () =>
     'sidebar.right.pane.tab',
     'conversation.input.dock',
     'conversation.session.header.actions',
+    'settings.plugins.tab',
   ])
 })
 
 test('the trim stylesheet is pane-scoped and hides the composer clutter', () => {
   mount()
-  const trim = styleTags.find((tag) => tag.dataset.pluginCss === 'dsh-side-assistant/sidebar-chat.css')
+  const trim = styleTags.find((tag) => tag.dataset.pluginCss === 'side-assistant/sidebar-chat.css')
   assert.ok(trim, 'the sidebar trim stylesheet must be installed')
 
   // Scan declarations only: comment prose must never be mistaken for a
@@ -428,13 +435,13 @@ test('the trim stylesheet is pane-scoped and hides the composer clutter', () => 
 
 test('the pane root lays the strip above the chat', () => {
   mount()
-  const sheet = styleTags.find((tag) => tag.dataset.pluginCss === 'dsh-side-assistant/action.css')
+  const sheet = styleTags.find((tag) => tag.dataset.pluginCss === 'side-assistant/action.css')
   const css = sheet.textContent
   // Our own tab body must establish the column the shipped chat fills, and it
   // must carry data-sidebar-chat itself: the trim above selects on it.
-  assert.ok(css.includes('.dsh-side-assistant-pane {'))
+  assert.ok(css.includes('.side-assistant-pane {'))
   assert.ok(css.includes('flex-direction: column'))
-  assert.ok(css.includes('.dsh-side-assistant-pane__chat {'))
+  assert.ok(css.includes('.side-assistant-pane__chat {'))
   assert.ok(css.includes('.dsh-sa-progress'))
   assert.ok(css.includes('max-height: 148px'), 'the strip must not eat the pane')
   assert.ok(css.includes('overflow-y: auto'), 'the strip must scroll')
@@ -444,7 +451,7 @@ test('registers a chat tab type for this plugin’s own address', () => {
   const mounted = mount()
   assert.equal(mounted.tabs.length, 1)
   const tab = mounted.tabs[0]
-  assert.equal(tab.id, 'dsh-side-assistant/chat')
+  assert.equal(tab.id, 'side-assistant/chat')
   assert.equal(tab.kind, 'sideassistant')
   assert.deepEqual(tab.patterns, ['dsh-resource://sideassistant/chat/**'])
   assert.equal(tab.priority, 'builtin')
@@ -459,7 +466,7 @@ test('registers the pane body against the shared chat seat', () => {
   const mounted = mount()
   const pane = mounted.getPane()
   assert.equal(pane.options.name, 'sidebar.right.pane.tab')
-  assert.equal(pane.options.key, 'dsh-side-assistant/chat')
+  assert.equal(pane.options.key, 'side-assistant/chat')
   assert.equal(pane.options.locale, 'sideAssistant')
   assert.deepEqual(pane.options.children, {
     'sidebar.chat.conversation': { kind: 'single', scope: 'session' },
@@ -677,10 +684,10 @@ function collect(tree, predicate) {
   return found
 }
 
-const isTrigger = (node) => node.props.className === 'dsh-side-assistant__action'
-const isMenu = (node) => node.props.className === 'dsh-side-assistant__menu'
+const isTrigger = (node) => node.props.className === 'side-assistant__action'
+const isMenu = (node) => node.props.className === 'side-assistant__menu'
 const isItem = (node) => typeof node.props.className === 'string'
-  && node.props.className.includes('dsh-side-assistant__menu-item')
+  && node.props.className.includes('side-assistant__menu-item')
 const menuLabels = (tree) => collect(tree, isItem).map((node) => node.children.join(''))
 
 /** Settle one pass: render, attach refs, run the effects that changed. */
@@ -984,7 +991,7 @@ async function foldStrip(panel) {
 
 test('the pane elects the embedded chat and carries the sidebar anchor', async () => {
   const pane = await renderPane()
-  const root = collect(pane.tree, (node) => node.props.className === 'dsh-side-assistant-pane')[0]
+  const root = collect(pane.tree, (node) => node.props.className === 'side-assistant-pane')[0]
   assert.ok(root, 'the pane root must exist')
   assert.equal(root.props['data-sidebar-chat'], '', 'the trim CSS selects on this attribute')
 
@@ -1308,7 +1315,7 @@ test('a pane without the remote still renders the chat', async () => {
 })
 
 /** The delete controls the menu carries: one two-character word per row. */
-const isMenuDelete = (node) => node.props.className === 'dsh-side-assistant__menu-delete'
+const isMenuDelete = (node) => node.props.className === 'side-assistant__menu-delete'
 const menuDeletes = (tree) => collect(tree, isMenuDelete)
 const deleteLabels = (tree) => menuDeletes(tree).map((node) => node.children.join(''))
 
@@ -1418,6 +1425,193 @@ test('deleting an assistant that is not on screen touches no tab', async () => {
 
   assert.deepEqual(mounted.archived, [{ sessionId: 'CX', options: { stopActivity: true } }])
   assert.deepEqual(mounted.closed, [], 'nothing was open for it')
+  unmount()
+})
+
+/** ------------------------------------------ the settings page, rendered */
+
+/** The settings document the fake Host answers with. */
+function settingsPayload(overrides = {}) {
+  return {
+    ok: true,
+    settings: {
+      label: '我的助手',
+      opener: '你好',
+      modelMode: 'host',
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      custom: { baseURL: '', model: '', apiKeyEnv: 'SIDE_ASSISTANT_API_KEY' },
+      steps: 9,
+      tokens: 12345,
+      style: 'detailed',
+      ...overrides,
+    },
+    limits: { steps: [1, 50], tokens: [500, 200000] },
+    keyConfigured: true,
+  }
+}
+
+/** Mount the settings page with its own hook slots. */
+function renderSettings(extra = {}) {
+  const mounted = mount()
+  const entry = mounted.registered.find((row) => row.options.name === 'settings.plugins.tab')
+  assert.ok(entry, 'the settings page must be registered into settings.plugins.tab')
+  unmount()
+  hookSlots = []
+  const dictionary = mounted.getLocale().dictionaries.zh
+  const props = { t: (key) => dictionary[key] ?? key, ...entry.options.inject(), ...extra }
+  return {
+    mounted,
+    entry,
+    props,
+    draw: () => draw(entry.component, props),
+    drawAsync: () => drawAsync(entry.component, props),
+  }
+}
+
+const inputNamed = (tree, name) => collect(tree, (node) => node.type === 'input' && node.props.name === name)[0]
+
+const buttonWithClass = (tree, className) => collect(tree, (node) => typeof node.props.className === 'string'
+  && node.props.className.split(' ').includes(className))[0]
+
+/** Every piece of copy under a tree, for reading what a status line says. */
+function textOf(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(textOf).join('')
+  return (node.children ?? []).map(textOf).join('')
+}
+
+test('the settings page registers as a settings tab with its dictionary title', () => {
+  const mounted = mount()
+  const entry = mounted.registered.find((row) => row.options.name === 'settings.plugins.tab')
+  assert.ok(entry, 'settings.plugins.tab must carry the settings page')
+  assert.equal(entry.options.id, 'side-assistant')
+  assert.equal(entry.options.order, 60)
+  assert.equal(entry.options.locale, 'sideAssistant')
+  assert.deepEqual(entry.options.inject(), {})
+  assert.equal(entry.options.label(), mounted.getLocale().dictionaries.zh.title)
+  assert.equal(entry.options.label(), '侧边助手')
+  assert.equal(typeof entry.component, 'function')
+})
+
+test('a summary-only mount stays silent and sends no request', async () => {
+  const requests = []
+  globalThis.fetch = async (url) => {
+    requests.push(url)
+    return json(settingsPayload())
+  }
+
+  const session = renderSettings({ view: 'summary' })
+  const tree = await session.drawAsync()
+
+  assert.equal(Array.isArray(tree), false)
+  assert.ok(textOf(tree).includes('右侧栏'))
+  assert.deepEqual(collect(tree, (node) => node.type === 'input'), [])
+  assert.deepEqual(requests, [], 'the unopened row must not read settings')
+  unmount()
+})
+
+test('the settings page loads the stored settings on mount', async () => {
+  const requests = []
+  globalThis.fetch = async (url, init) => {
+    requests.push([url, init.method])
+    return json(settingsPayload())
+  }
+
+  const session = renderSettings()
+  const tree = await session.drawAsync()
+
+  assert.deepEqual(requests, [['/side-assistant/settings', 'GET']])
+  assert.equal(inputNamed(tree, 'steps').props.value, 9)
+  assert.equal(inputNamed(tree, 'tokens').props.value, 12345)
+  assert.equal(inputNamed(tree, 'label').props.value, '我的助手')
+  assert.equal(inputNamed(tree, 'opener').props.value, '你好')
+  // The host mode's fields carry what the document selected.
+  assert.equal(inputNamed(tree, 'provider').props.value, 'deepseek')
+  assert.equal(inputNamed(tree, 'model').props.value, 'deepseek-chat')
+  const selected = collect(tree, (node) => node.type === 'input'
+    && node.props.name === 'style'
+    && node.props.checked === true)
+  assert.equal(selected.length, 1, 'exactly one style is checked')
+  assert.equal(selected[0].props.value, 'detailed')
+  unmount()
+})
+
+test('pressing save posts the edited numbers as part of the settings', async () => {
+  const requests = []
+  globalThis.fetch = async (url, init) => {
+    const body = init.method === 'POST' ? JSON.parse(init.body) : undefined
+    requests.push([url, init.method, body])
+    if (init.method === 'POST') return json({ ok: true, settings: settingsPayload().settings, keyConfigured: true })
+    return json(settingsPayload())
+  }
+
+  const session = renderSettings()
+  let tree = await session.drawAsync()
+
+  inputNamed(tree, 'steps').props.onChange({ target: { value: '7' } })
+  tree = session.draw()
+  assert.equal(inputNamed(tree, 'steps').props.value, 7, 'the edit shows before the save')
+
+  tree = await press(session, buttonWithClass(tree, 'dsh-sa-settings-save'))
+
+  assert.deepEqual(requests[0], ['/side-assistant/settings', 'GET', undefined])
+  const posted = requests[1]
+  assert.equal(posted[0], '/side-assistant/settings')
+  assert.equal(posted[1], 'POST')
+  assert.equal(posted[2].settings.steps, 7)
+  assert.equal('apiKey' in posted[2], false, 'a blank key field must not overwrite the stored one')
+  assert.ok(textOf(tree).includes('已保存'))
+  unmount()
+})
+
+test('testing the connection reports the round trip and the model', async () => {
+  const requests = []
+  globalThis.fetch = async (url, init) => {
+    requests.push([url, init.method, init.method === 'POST' ? JSON.parse(init.body) : undefined])
+    if (url === '/side-assistant/ping') {
+      return json({ ok: true, ms: 320, provider: 'deepseek', model: 'deepseek-chat', text: 'pong' })
+    }
+    return json(settingsPayload())
+  }
+
+  const session = renderSettings()
+  let tree = await session.drawAsync()
+  tree = await press(session, buttonWithClass(tree, 'dsh-sa-settings-test'))
+
+  assert.deepEqual(requests[1], ['/side-assistant/ping', 'POST', {}])
+  assert.ok(textOf(tree).includes('连接正常 · 320ms · deepseek/deepseek-chat'))
+  unmount()
+})
+
+test('a failed connection test shows the host message', async () => {
+  globalThis.fetch = async (url) => (url === '/side-assistant/ping'
+    ? json({ ok: false, error: 'provider/unavailable', message: '模型 deepseek-chat 不可用' })
+    : json(settingsPayload()))
+
+  const session = renderSettings()
+  let tree = await session.drawAsync()
+  tree = await press(session, buttonWithClass(tree, 'dsh-sa-settings-test'))
+
+  const errors = collect(tree, (node) => node.props.className === 'dsh-sa-settings-error')
+  assert.ok(errors.length >= 1, 'a failed probe must be on screen')
+  assert.ok(textOf(errors[0]).includes('模型 deepseek-chat 不可用'))
+  assert.equal(textOf(tree).includes('连接正常'), false)
+  unmount()
+})
+
+test('a failed load shows the error and leaves the defaults usable', async () => {
+  globalThis.fetch = async () => json({ ok: false, error: 'storage/read-failed', message: '设置文件读不出来' })
+
+  const session = renderSettings()
+  const tree = await session.drawAsync()
+
+  const errors = collect(tree, (node) => node.props.className === 'dsh-sa-settings-error')
+  assert.ok(errors.length >= 1)
+  assert.ok(textOf(errors[0]).includes('设置文件读不出来'))
+  assert.equal(inputNamed(tree, 'steps').props.value, 5, 'the shipped defaults fill the form')
+  assert.equal(buttonWithClass(tree, 'dsh-sa-settings-save').props.disabled, false)
   unmount()
 })
 

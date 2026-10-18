@@ -1,5 +1,5 @@
 /**
- * Browser half of `dsh-side-assistant`.
+ * Browser half of `side-assistant`.
  *
  * One conversation-header button. Pressing it asks the Host half for this
  * Session's side assistant (a detached Session, created on first press and
@@ -43,7 +43,7 @@
  * with scoped CSS rather than by taking over the `conversation.composer` chain.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-side-assistant',
+  id: 'side-assistant',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -73,6 +73,41 @@ window.__ModuleLoader__.load({
       askProject: '这个项目是在干什么？',
       askWork: 'agent 正在进行什么工作？',
       askFailed: '发送失败，看看控制台',
+      // Settings page (Settings → Plugins). It lives outside the panel, so its
+      // copy names the page itself rather than reusing the pane's labels.
+      title: '侧边助手',
+      settingsIntro: '模型、上下文预算和回答风格都在这里设置；保存后新开的对话即按新设置工作。',
+      settingsModel: '模型',
+      settingsModeInherit: '跟随主会话',
+      settingsModeHost: '指定宿主模型',
+      settingsModeCustom: '自定义端点',
+      settingsProvider: 'provider',
+      settingsModelName: '模型',
+      settingsHostHint: '填宿主已配置的 provider / model（在 设置 → 模型 里配置）',
+      settingsBaseURL: 'Base URL',
+      settingsCustomModel: '模型',
+      settingsApiKey: 'API Key',
+      settingsApiKeyConfigured: '已配置',
+      settingsApiKeyKeep: '留空表示不改',
+      settingsApiKeyPlaceholder: 'sk-…',
+      settingsCustomHint: 'OpenAI 兼容端点：宿主会把它注册成一个名为 side-assistant-custom 的 provider',
+      settingsContext: '上下文',
+      settingsSteps: '进度保留的完整 step 条数',
+      settingsTokens: '上下文预算上限（token）',
+      settingsStyle: '回答风格',
+      settingsStyleBrief: '简约',
+      settingsStyleDetailed: '详细',
+      settingsIdentity: '助手',
+      settingsLabel: '助手名',
+      settingsOpener: '开场白',
+      settingsSave: '保存',
+      settingsSaving: '保存中…',
+      settingsSaved: '已保存',
+      settingsTest: '测试连接',
+      settingsTesting: '测试中…',
+      settingsPingOk: '连接正常',
+      settingsLoadFailed: '读不到当前设置，先用默认值',
+      description: '在右侧栏里开一个围绕当前对话的子 agent；模型、上下文预算和回答风格都在这里调整',
     }
 
     const en = {
@@ -97,6 +132,39 @@ window.__ModuleLoader__.load({
       askProject: 'What is this project about?',
       askWork: 'What is the agent working on?',
       askFailed: 'Could not send, see the console',
+      title: 'Side assistant',
+      settingsIntro: 'Model, context budget and answer style; saved changes apply to new conversations.',
+      settingsModel: 'Model',
+      settingsModeInherit: 'Follow the main session',
+      settingsModeHost: 'Use a host model',
+      settingsModeCustom: 'Custom endpoint',
+      settingsProvider: 'Provider',
+      settingsModelName: 'Model',
+      settingsHostHint: 'Give a provider / model the host already has (configure it in Settings → Models)',
+      settingsBaseURL: 'Base URL',
+      settingsCustomModel: 'Model',
+      settingsApiKey: 'API key',
+      settingsApiKeyConfigured: 'Configured',
+      settingsApiKeyKeep: 'Leave blank to keep',
+      settingsApiKeyPlaceholder: 'sk-…',
+      settingsCustomHint: 'OpenAI-compatible endpoint: the host registers it as a provider named side-assistant-custom',
+      settingsContext: 'Context',
+      settingsSteps: 'Full steps kept in the progress digest',
+      settingsTokens: 'Context budget ceiling (tokens)',
+      settingsStyle: 'Answer style',
+      settingsStyleBrief: 'Brief',
+      settingsStyleDetailed: 'Detailed',
+      settingsIdentity: 'Assistant',
+      settingsLabel: 'Name',
+      settingsOpener: 'Opening message',
+      settingsSave: 'Save',
+      settingsSaving: 'Saving…',
+      settingsSaved: 'Saved',
+      settingsTest: 'Test connection',
+      settingsTesting: 'Testing…',
+      settingsPingOk: 'Connection OK',
+      settingsLoadFailed: 'Could not read the current settings; showing defaults',
+      description: 'A subagent beside the current conversation; its model, context budget and answer style are configured here',
     }
 
     /** Cordis services this browser half requires. */
@@ -147,7 +215,7 @@ window.__ModuleLoader__.load({
     const CHAT_PROTOCOL = 'sideassistant'
     const CHAT_KIND = 'sideassistant'
     const CHAT_ADDRESS = `dsh-resource://${CHAT_PROTOCOL}/chat/`
-    const TAB_ID = 'dsh-side-assistant/chat'
+    const TAB_ID = 'side-assistant/chat'
 
     /** How many progress rows the panel keeps. */
     const PROGRESS_ROWS = 30
@@ -293,11 +361,11 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = `
-.dsh-side-assistant {
+.side-assistant {
   position: relative;
   display: inline-flex;
 }
-.dsh-side-assistant__action {
+.side-assistant__action {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -311,22 +379,22 @@ window.__ModuleLoader__.load({
   line-height: 16px;
   cursor: pointer;
 }
-.dsh-side-assistant__action:hover:not(:disabled),
-.dsh-side-assistant__action:focus-visible {
+.side-assistant__action:hover:not(:disabled),
+.side-assistant__action:focus-visible {
   color: var(--dsw-alias-label-primary);
 }
-.dsh-side-assistant__action:disabled {
+.side-assistant__action:disabled {
   cursor: default;
   opacity: 0.6;
 }
-.dsh-side-assistant__action[data-state="error"] {
+.side-assistant__action[data-state="error"] {
   color: var(--dsw-alias-state-error-primary);
 }
-.dsh-side-assistant__action-icon {
+.side-assistant__action-icon {
   flex: none;
   display: block;
 }
-.dsh-side-assistant__menu {
+.side-assistant__menu {
   position: absolute;
   top: calc(100% + 5px);
   left: 0;
@@ -346,7 +414,7 @@ window.__ModuleLoader__.load({
   backdrop-filter: var(--dsw-menu-backdrop-filter);
   list-style: none;
 }
-.dsh-side-assistant__menu-item {
+.side-assistant__menu-item {
   box-sizing: border-box;
   width: 100%;
   min-height: 28px;
@@ -360,23 +428,23 @@ window.__ModuleLoader__.load({
   text-align: left;
   cursor: pointer;
 }
-.dsh-side-assistant__menu-item:hover:not(:disabled),
-.dsh-side-assistant__menu-item:focus-visible {
+.side-assistant__menu-item:hover:not(:disabled),
+.side-assistant__menu-item:focus-visible {
   background: var(--dsw-alias-fill-l1);
 }
-.dsh-side-assistant__menu-row {
+.side-assistant__menu-row {
   display: flex;
   align-items: center;
   gap: 2px;
 }
-.dsh-side-assistant__menu-row > .dsh-side-assistant__menu-item {
+.side-assistant__menu-row > .side-assistant__menu-item {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.dsh-side-assistant__menu-delete {
+.side-assistant__menu-delete {
   flex: none;
   min-height: 22px;
   padding: 2px 6px;
@@ -389,21 +457,21 @@ window.__ModuleLoader__.load({
   white-space: nowrap;
   cursor: pointer;
 }
-.dsh-side-assistant__menu-delete:hover,
-.dsh-side-assistant__menu-delete:focus-visible,
-.dsh-side-assistant__menu-delete[data-confirming="true"] {
+.side-assistant__menu-delete:hover,
+.side-assistant__menu-delete:focus-visible,
+.side-assistant__menu-delete[data-confirming="true"] {
   color: var(--dsw-alias-state-error-primary);
   border-color: var(--dsw-alias-state-error-primary);
 }
-.dsh-side-assistant__menu-delete[data-failed="true"] {
+.side-assistant__menu-delete[data-failed="true"] {
   color: var(--dsw-alias-label-secondary);
   border-color: var(--dsw-alias-border-l1);
 }
-.dsh-side-assistant__menu-delete:disabled {
+.side-assistant__menu-delete:disabled {
   opacity: 0.6;
   cursor: default;
 }
-.dsh-side-assistant__menu-new {
+.side-assistant__menu-new {
   margin-top: 2px;
   padding-top: 6px;
   border-top: 0.5px solid var(--dsw-alias-border-l1);
@@ -411,7 +479,7 @@ window.__ModuleLoader__.load({
   color: var(--dsw-alias-label-secondary);
 }
 @media (max-width: 480px) {
-  .dsh-side-assistant__action-label { display: none; }
+  .side-assistant__action-label { display: none; }
 }
 
 /*
@@ -419,7 +487,7 @@ window.__ModuleLoader__.load({
  * by this plugin, so it must set it too — and it must carry
  * data-sidebar-chat, which is the anchor every rule in SIDEBAR_CSS selects.
  */
-.dsh-side-assistant-pane {
+.side-assistant-pane {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -431,18 +499,18 @@ window.__ModuleLoader__.load({
   min-height: 0;
   overflow: hidden;
 }
-.dsh-side-assistant-pane__chat {
+.side-assistant-pane__chat {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
 }
-.dsh-side-assistant-pane__chat > * {
+.side-assistant-pane__chat > * {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
 }
-.dsh-side-assistant-pane__error {
+.side-assistant-pane__error {
   margin: 12px;
   color: var(--dsw-alias-label-secondary);
   font-size: var(--dsh-content-font-size, 14px);
@@ -579,10 +647,19 @@ window.__ModuleLoader__.load({
 }
 `
 
-    const STYLE_ID = 'dsh-side-assistant/action.css'
+    const STYLE_ID = 'side-assistant/action.css'
 
     /** Stylesheet identity for the pane-local composer trim. */
-    const SIDEBAR_ID = 'dsh-side-assistant/sidebar-chat.css'
+    const SIDEBAR_ID = 'side-assistant/sidebar-chat.css'
+
+    /**
+     * Stylesheet identity for the Settings page.
+     *
+     * A separate sheet, not another block in `SIDEBAR_CSS`: that one is anchored
+     * on `[data-sidebar-chat]` because it must never leak out of the pane, while
+     * this page renders in Settings → Plugins, outside the pane entirely.
+     */
+    const SETTINGS_ID = 'side-assistant/settings.css'
 
     /**
      * Slot outlets trimmed out of the side panel's composer.
@@ -826,6 +903,206 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
 `
 
     /**
+     * Settings → Plugins → side assistant.
+     *
+     * Every selector is prefixed `dsh-sa-settings-` and is deliberately NOT
+     * scoped with `[data-sidebar-chat]`: the page renders in the Settings
+     * plugin list, where no sidebar pane exists, so this sheet is installed on
+     * its own (see `SETTINGS_ID`) rather than folded into `SIDEBAR_CSS`.
+     * Colours and radii come from the theme's alias variables, so the page
+     * follows the active light/dark theme instead of hard-coding either.
+     */
+    const SETTINGS_CSS = `
+.dsh-sa-settings {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+  padding: 4px 0 8px;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.dsh-sa-settings-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dsh-sa-settings-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-sa-settings-intro {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-sa-settings-group {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-alias-bg-layer-1);
+}
+.dsh-sa-settings-group-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-sa-settings-field {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  gap: 5px;
+  min-width: 0;
+}
+.dsh-sa-settings-field-label {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-sa-settings-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.dsh-sa-settings-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  outline: none;
+}
+.dsh-sa-settings-input:hover {
+  border-color: var(--dsw-alias-border-l4);
+}
+.dsh-sa-settings-input:focus,
+.dsh-sa-settings-input:focus-visible {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+.dsh-sa-settings-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dsh-sa-settings-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dsh-sa-settings-option {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.dsh-sa-settings-option:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.dsh-sa-settings-option[data-checked="true"] {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-sa-settings-radio {
+  flex: none;
+  margin: 0;
+  accent-color: var(--dsw-alias-state-business-primary);
+}
+.dsh-sa-settings-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+.dsh-sa-settings-badge {
+  flex: none;
+  margin-bottom: 5px;
+  padding: 1px 8px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.dsh-sa-settings-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--dsw-alias-border-l4);
+}
+.dsh-sa-settings-button {
+  min-height: 30px;
+  padding: 5px 14px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.dsh-sa-settings-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.dsh-sa-settings-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.dsh-sa-settings-button--primary {
+  border-color: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+}
+.dsh-sa-settings-saved {
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 12px;
+}
+.dsh-sa-settings-error {
+  margin: 0;
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.dsh-sa-settings-probe {
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+`
+
+    /**
      * Install one stylesheet once, returning its removal.
      * Runs inside `apply`'s effect so unload removes the tag again.
      * @param id - `data-plugin-css` identity guarding against a second tag.
@@ -837,7 +1114,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
       const selector = `style[data-plugin-css=${JSON.stringify(id)}]`
       if (document.querySelector(selector) !== null) return () => {}
       const tag = document.createElement('style')
-      tag.dataset.plugin = 'dsh-side-assistant'
+      tag.dataset.plugin = 'side-assistant'
       tag.dataset.pluginCss = id
       tag.textContent = text
       document.head.appendChild(tag)
@@ -1046,10 +1323,10 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
       const busy = phase === 'busy'
       const title = phase === 'error' ? t('failed') : t('open')
 
-      return h('div', { className: 'dsh-side-assistant', ref: rootRef },
+      return h('div', { className: 'side-assistant', ref: rootRef },
         h('button', {
           type: 'button',
-          className: 'dsh-side-assistant__action',
+          className: 'side-assistant__action',
           'data-state': phase,
           onClick,
           disabled: busy || !parentSessionId,
@@ -1059,7 +1336,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
           'aria-expanded': menu !== null,
         },
         h('svg', {
-          className: 'dsh-side-assistant__action-icon',
+          className: 'side-assistant__action-icon',
           viewBox: '0 0 16 16',
           width: 14,
           height: 14,
@@ -1072,22 +1349,22 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
         },
         h('path', { d: 'M2.5 3.2h11v7.4h-6L4.2 13.4V10.6h-1.7z' }),
         h('path', { d: 'M5.4 6.1h5.2M5.4 8h3.4' })),
-        h('span', { className: 'dsh-side-assistant__action-label' }, busy ? t('busy') : t('label'))),
+        h('span', { className: 'side-assistant__action-label' }, busy ? t('busy') : t('label'))),
         menu === null ? null : h('ul', {
           ref: menuRef,
-          className: 'dsh-side-assistant__menu',
+          className: 'side-assistant__menu',
           style: { left: shift },
           'aria-label': t('choose'),
         },
-        menu.map((row, index) => h('li', { key: row.childId, className: 'dsh-side-assistant__menu-row' },
+        menu.map((row, index) => h('li', { key: row.childId, className: 'side-assistant__menu-row' },
           h('button', {
             type: 'button',
-            className: 'dsh-side-assistant__menu-item',
+            className: 'side-assistant__menu-item',
             onClick: () => open({ childId: row.childId }),
           }, `${t('assistant')} ${index + 1}`),
           h('button', {
             type: 'button',
-            className: 'dsh-side-assistant__menu-delete',
+            className: 'side-assistant__menu-delete',
             'data-confirming': armedChild === row.childId ? 'true' : 'false',
             'data-failed': failedChild === row.childId ? 'true' : 'false',
             disabled: deletingChild === row.childId,
@@ -1103,7 +1380,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
         h('li', null,
           h('button', {
             type: 'button',
-            className: 'dsh-side-assistant__menu-item dsh-side-assistant__menu-new',
+            className: 'side-assistant__menu-item side-assistant__menu-new',
             onClick: () => open({ create: true }),
           }, t('create')))))
     }
@@ -1560,7 +1837,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
         const detail = this.state.error === null || this.state.error === undefined
           ? String(this.state.error)
           : String(this.state.error.message === undefined ? this.state.error : this.state.error.message)
-        return h('p', { className: 'dsh-side-assistant-pane__error' }, `${this.props.message}: ${detail}`)
+        return h('p', { className: 'side-assistant-pane__error' }, `${this.props.message}: ${detail}`)
       }
     }
 
@@ -1654,8 +1931,8 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
       const chat = value === undefined
         ? null
         : reference === undefined || typeof SessionProvider !== 'function' || typeof renderFactorySlot !== 'function'
-          ? h('p', { className: 'dsh-side-assistant-pane__error' }, t('chatFailed'))
-          : h('div', { className: 'dsh-side-assistant-pane__chat' },
+          ? h('p', { className: 'side-assistant-pane__error' }, t('chatFailed'))
+          : h('div', { className: 'side-assistant-pane__chat' },
             h(ChatBoundary, { message: t('chatFailed') },
               h(SessionProvider, { session: reference },
                 renderFactorySlot(
@@ -1664,13 +1941,405 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
                   { slots: { views: ChatView } },
                 ))))
 
-      return h('div', { className: 'dsh-side-assistant-pane', 'data-sidebar-chat': '' },
+      return h('div', { className: 'side-assistant-pane', 'data-sidebar-chat': '' },
         address === undefined ? null : h(ProgressPanel, {
           parentSessionId: address.parentSessionId,
           remote,
           t,
         }),
         chat)
+    }
+
+    /** Host routes the Settings page talks to, both registered by `index.js`. */
+    const SETTINGS_ENDPOINT = '/side-assistant/settings'
+    const PING_ENDPOINT = '/side-assistant/ping'
+
+    /** How long the "saved" confirmation stays on screen. */
+    const SAVED_MS = 2500
+
+    /** Ways the assistant can choose a model, and ways it can answer. */
+    const MODEL_MODES = ['inherit', 'host', 'custom']
+    const ANSWER_STYLES = ['brief', 'detailed']
+
+    /**
+     * Values the page starts from, mirroring the Host's shipped defaults.
+     *
+     * A failed or slow GET must not leave the page empty: the form shows these,
+     * and a save from them writes a document the Host accepts as-is.
+     */
+    const SETTINGS_DEFAULTS = {
+      label: '侧边助手',
+      opener: 'hello',
+      modelMode: 'inherit',
+      provider: '',
+      model: '',
+      custom: { baseURL: '', model: '', apiKeyEnv: 'SIDE_ASSISTANT_API_KEY' },
+      steps: 5,
+      tokens: 2000,
+      style: 'brief',
+    }
+
+    /** Field ranges the Host enforces; the page clamps to them before saving. */
+    const SETTINGS_LIMITS = { steps: [1, 50], tokens: [500, 200000] }
+
+    /**
+     * Coerce one number field into a whole number inside its range.
+     *
+     * Empty and non-numeric input fall back to the shipped default rather than
+     * sending a hole the Host would have to repair: an input cleared on the way
+     * to a new value is a normal state for a text box.
+     * @param value - the current form value.
+     * @param range - `[smallest, largest]` accepted.
+     * @param fallback - value used when `value` is not a number.
+     * @returns the clamped whole number.
+     */
+    function wholeNumber(value, range, fallback) {
+      if (value === '' || value === null || value === undefined) return fallback
+      const number = typeof value === 'number' ? value : Number(value)
+      if (!Number.isFinite(number)) return fallback
+      return Math.min(range[1], Math.max(range[0], Math.round(number)))
+    }
+
+    /**
+     * One complete settings document, field by field.
+     *
+     * The Host normalises too; doing it here as well is what lets the form bind
+     * directly to the document (a missing style must not become an unchecked
+     * radio group) and keeps a save from round-tripping values the page never
+     * meant to change.
+     * @param raw - what the Host returned, or anything at all.
+     * @returns every field answered.
+     */
+    function normaliseSettings(raw) {
+      const base = SETTINGS_DEFAULTS
+      const source = raw !== null && typeof raw === 'object' ? raw : {}
+      const custom = source.custom !== null && typeof source.custom === 'object' ? source.custom : {}
+      return {
+        label: typeof source.label === 'string' ? source.label : base.label,
+        opener: typeof source.opener === 'string' ? source.opener : base.opener,
+        modelMode: MODEL_MODES.includes(source.modelMode) ? source.modelMode : base.modelMode,
+        provider: typeof source.provider === 'string' ? source.provider : base.provider,
+        model: typeof source.model === 'string' ? source.model : base.model,
+        custom: {
+          baseURL: typeof custom.baseURL === 'string' ? custom.baseURL : base.custom.baseURL,
+          model: typeof custom.model === 'string' ? custom.model : base.custom.model,
+          apiKeyEnv: typeof custom.apiKeyEnv === 'string' && custom.apiKeyEnv !== ''
+            ? custom.apiKeyEnv
+            : base.custom.apiKeyEnv,
+        },
+        steps: wholeNumber(source.steps, SETTINGS_LIMITS.steps, base.steps),
+        tokens: wholeNumber(source.tokens, SETTINGS_LIMITS.tokens, base.tokens),
+        style: ANSWER_STYLES.includes(source.style) ? source.style : base.style,
+      }
+    }
+
+    /**
+     * GET one Host route and unwrap its `{ ok: … }` envelope.
+     * @returns the parsed payload, with `ok === true`.
+     * @throws when the transport fails or the envelope reports a failure.
+     */
+    async function read(path) {
+      const response = await fetch(path, { method: 'GET' })
+
+      let payload = null
+      try {
+        payload = await response.json()
+      } catch {
+        payload = null
+      }
+
+      if (payload === null || payload.ok !== true) {
+        const detail = payload && (payload.message || payload.error)
+        throw new Error(detail || `side-assistant: HTTP ${response.status}`)
+      }
+      return payload
+    }
+
+    /**
+     * The text a failure should put on screen.
+     * @param failure - anything thrown.
+     * @returns its message, or its string form.
+     */
+    function messageOf(failure) {
+      return failure instanceof Error ? failure.message : String(failure)
+    }
+
+    /**
+     * Settings → Plugins → side assistant.
+     *
+     * Registered into `settings.plugins.tab` — the tab strip inside
+     * Settings → Plugins — not `plugins.item`, which belongs to the plugin
+     * manager panel (no `configForms.whileServed` either: this plugin owns no
+     * settings namespace, its document lives in its own storage file).
+     * The page reads the current settings once on mount, writes them back as one
+     * flat object, and can ping the Host to prove the chosen model answers.
+     *
+     * The API key is write-only: the field starts empty and is never populated
+     * from the Host, so the stored secret never travels back to the browser. A
+     * blank field on save means "keep the stored key".
+     */
+    function SideAssistantSettings({ t, view }) {
+      const copy = typeof t === 'function' ? t : (key) => key
+      const [form, setForm] = React.useState(SETTINGS_DEFAULTS)
+      const [limits, setLimits] = React.useState(SETTINGS_LIMITS)
+      const [keyConfigured, setKeyConfigured] = React.useState(false)
+      const [apiKey, setApiKey] = React.useState('')
+      // `busy` is `null | 'saving' | 'testing'`: both buttons are disabled for
+      // either write, so a save cannot race a probe against the same model.
+      const [busy, setBusy] = React.useState(null)
+      const [error, setError] = React.useState(null)
+      const [saved, setSaved] = React.useState(false)
+      const [probe, setProbe] = React.useState(null)
+      const alive = React.useRef(true)
+      const savedTimer = React.useRef(null)
+
+      React.useEffect(() => {
+        alive.current = true
+        // The entry is also rendered as a one-liner in the plugin list; only
+        // the opened page needs the stored document, so the row stays silent.
+        if (view === 'summary') return undefined
+        let cancelled = false
+        read(SETTINGS_ENDPOINT)
+          .then((payload) => {
+            if (cancelled) return
+            setForm(normaliseSettings(payload.settings))
+            setKeyConfigured(payload.keyConfigured === true)
+            if (payload.limits !== null && typeof payload.limits === 'object') {
+              setLimits({
+                steps: Array.isArray(payload.limits.steps) ? payload.limits.steps : SETTINGS_LIMITS.steps,
+                tokens: Array.isArray(payload.limits.tokens) ? payload.limits.tokens : SETTINGS_LIMITS.tokens,
+              })
+            }
+          })
+          .catch((failure) => {
+            if (!cancelled) setError(`${copy('settingsLoadFailed')}：${messageOf(failure)}`)
+          })
+        return () => {
+          cancelled = true
+          alive.current = false
+          if (savedTimer.current !== null) {
+            clearTimeout(savedTimer.current)
+            savedTimer.current = null
+          }
+        }
+      }, [])
+
+      /** The document a save writes: the form, clamped and trimmed. */
+      const formDocument = () => ({
+        label: form.label,
+        opener: form.opener,
+        modelMode: form.modelMode,
+        provider: form.provider,
+        model: form.model,
+        custom: {
+          baseURL: form.custom.baseURL,
+          model: form.custom.model,
+          apiKeyEnv: form.custom.apiKeyEnv,
+        },
+        steps: wholeNumber(form.steps, limits.steps, SETTINGS_DEFAULTS.steps),
+        tokens: wholeNumber(form.tokens, limits.tokens, SETTINGS_DEFAULTS.tokens),
+        style: form.style,
+      })
+
+      const save = async () => {
+        if (busy !== null) return
+        setBusy('saving')
+        setError(null)
+        setSaved(false)
+
+        const body = { settings: formDocument() }
+        const key = apiKey.trim()
+        if (key !== '') body.apiKey = key
+
+        try {
+          const payload = await post(SETTINGS_ENDPOINT, body)
+          if (!alive.current) return
+          setForm(normaliseSettings(payload.settings))
+          setKeyConfigured(payload.keyConfigured === true)
+          setApiKey('')
+          setSaved(true)
+          if (savedTimer.current !== null) clearTimeout(savedTimer.current)
+          savedTimer.current = setTimeout(() => {
+            savedTimer.current = null
+            if (alive.current) setSaved(false)
+          }, SAVED_MS)
+        } catch (failure) {
+          if (alive.current) setError(messageOf(failure))
+        } finally {
+          if (alive.current) setBusy(null)
+        }
+      }
+
+      const test = async () => {
+        if (busy !== null) return
+        setBusy('testing')
+        setError(null)
+        setProbe(null)
+
+        try {
+          const payload = await post(PING_ENDPOINT, {})
+          if (!alive.current) return
+          setProbe({
+            ok: true,
+            ms: payload.ms,
+            provider: payload.provider,
+            model: payload.model,
+          })
+        } catch (failure) {
+          if (!alive.current) return
+          setProbe({ ok: false, message: messageOf(failure) })
+        } finally {
+          if (alive.current) setBusy(null)
+        }
+      }
+
+      const pick = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+      const typed = (key) => (event) => pick(key, event.target.value)
+      const numbered = (key) => (event) => pick(key, event.target.value === '' ? '' : Number(event.target.value))
+      const typedCustom = (key) => (event) => setForm((current) => ({
+        ...current,
+        custom: { ...current.custom, [key]: event.target.value },
+      }))
+
+      const field = (label, control, hint) => h('div', { className: 'dsh-sa-settings-field' },
+        h('span', { className: 'dsh-sa-settings-field-label' }, label),
+        control,
+        hint === undefined ? null : h('p', { className: 'dsh-sa-settings-hint' }, hint))
+
+      const textInput = (name, value, onChange) => h('input', {
+        className: 'dsh-sa-settings-input',
+        type: 'text',
+        name,
+        value,
+        onChange,
+      })
+
+      const choices = (name, current, options, onPick) => h('div', {
+        className: 'dsh-sa-settings-options',
+        role: 'radiogroup',
+        'aria-label': name,
+      }, options.map(([value, text]) => h('label', {
+        key: value,
+        className: 'dsh-sa-settings-option',
+        'data-checked': current === value ? 'true' : 'false',
+      },
+      h('input', {
+        className: 'dsh-sa-settings-radio',
+        type: 'radio',
+        name,
+        value,
+        checked: current === value,
+        onChange: () => onPick(value),
+      }),
+      h('span', null, text))))
+
+      const modelSection = h('section', { className: 'dsh-sa-settings-group' },
+        h('h3', { className: 'dsh-sa-settings-group-title' }, copy('settingsModel')),
+        choices('modelMode', form.modelMode, [
+          ['inherit', copy('settingsModeInherit')],
+          ['host', copy('settingsModeHost')],
+          ['custom', copy('settingsModeCustom')],
+        ], (value) => pick('modelMode', value)),
+        form.modelMode === 'host'
+          ? h('div', { className: 'dsh-sa-settings-inline' },
+            field(copy('settingsProvider'), textInput('provider', form.provider, typed('provider'))),
+            field(copy('settingsModelName'), textInput('model', form.model, typed('model'))))
+          : null,
+        form.modelMode === 'host'
+          ? h('p', { className: 'dsh-sa-settings-hint' }, copy('settingsHostHint'))
+          : null,
+        form.modelMode === 'custom'
+          ? h('div', { className: 'dsh-sa-settings-inline' },
+            field(copy('settingsBaseURL'), textInput('baseURL', form.custom.baseURL, typedCustom('baseURL'))),
+            field(copy('settingsCustomModel'), textInput('customModel', form.custom.model, typedCustom('model'))))
+          : null,
+        form.modelMode === 'custom'
+          ? h('div', { className: 'dsh-sa-settings-row' },
+            field(copy('settingsApiKey'), h('input', {
+              className: 'dsh-sa-settings-input',
+              type: 'password',
+              name: 'apiKey',
+              autoComplete: 'off',
+              value: apiKey,
+              placeholder: keyConfigured ? copy('settingsApiKeyKeep') : copy('settingsApiKeyPlaceholder'),
+              onChange: (event) => setApiKey(event.target.value),
+            })),
+            keyConfigured ? h('span', { className: 'dsh-sa-settings-badge' }, copy('settingsApiKeyConfigured')) : null)
+          : null,
+        form.modelMode === 'custom'
+          ? h('p', { className: 'dsh-sa-settings-hint' }, copy('settingsCustomHint'))
+          : null)
+
+      const contextSection = h('section', { className: 'dsh-sa-settings-group' },
+        h('h3', { className: 'dsh-sa-settings-group-title' }, copy('settingsContext')),
+        h('div', { className: 'dsh-sa-settings-inline' },
+          field(copy('settingsSteps'), h('input', {
+            className: 'dsh-sa-settings-input',
+            type: 'number',
+            name: 'steps',
+            min: limits.steps[0],
+            max: limits.steps[1],
+            step: 1,
+            value: form.steps,
+            onChange: numbered('steps'),
+          })),
+          field(copy('settingsTokens'), h('input', {
+            className: 'dsh-sa-settings-input',
+            type: 'number',
+            name: 'tokens',
+            min: limits.tokens[0],
+            max: limits.tokens[1],
+            step: 1,
+            value: form.tokens,
+            onChange: numbered('tokens'),
+          }))))
+
+      const styleSection = h('section', { className: 'dsh-sa-settings-group' },
+        h('h3', { className: 'dsh-sa-settings-group-title' }, copy('settingsStyle')),
+        choices('style', form.style, [
+          ['brief', copy('settingsStyleBrief')],
+          ['detailed', copy('settingsStyleDetailed')],
+        ], (value) => pick('style', value)))
+
+      const identitySection = h('section', { className: 'dsh-sa-settings-group' },
+        h('h3', { className: 'dsh-sa-settings-group-title' }, copy('settingsIdentity')),
+        h('div', { className: 'dsh-sa-settings-inline' },
+          field(copy('settingsLabel'), textInput('label', form.label, typed('label'))),
+          field(copy('settingsOpener'), textInput('opener', form.opener, typed('opener')))))
+
+      // The plugin list renders the same entry as a one-liner; returning the
+      // description here keeps that row from expanding into the whole form.
+      if (view === 'summary') return copy('description')
+
+      return h('div', { className: 'dsh-sa-settings' },
+        h('div', { className: 'dsh-sa-settings-header' },
+          h('h2', { className: 'dsh-sa-settings-title' }, copy('title')),
+          h('p', { className: 'dsh-sa-settings-intro' }, copy('settingsIntro'))),
+        modelSection,
+        contextSection,
+        styleSection,
+        identitySection,
+        h('div', { className: 'dsh-sa-settings-footer' },
+          h('button', {
+            className: 'dsh-sa-settings-button dsh-sa-settings-save dsh-sa-settings-button--primary',
+            type: 'button',
+            disabled: busy !== null,
+            onClick: save,
+          }, busy === 'saving' ? copy('settingsSaving') : copy('settingsSave')),
+          h('button', {
+            className: 'dsh-sa-settings-button dsh-sa-settings-test',
+            type: 'button',
+            disabled: busy !== null,
+            onClick: test,
+          }, busy === 'testing' ? copy('settingsTesting') : copy('settingsTest')),
+          saved ? h('span', { className: 'dsh-sa-settings-saved', role: 'status' }, copy('settingsSaved')) : null),
+        error === null ? null : h('p', { className: 'dsh-sa-settings-error', role: 'alert' }, error),
+        probe === null
+          ? null
+          : probe.ok === true
+            ? h('p', { className: 'dsh-sa-settings-probe', role: 'status' },
+              `${copy('settingsPingOk')} · ${probe.ms}ms · ${probe.provider}/${probe.model}`)
+            : h('p', { className: 'dsh-sa-settings-error', role: 'alert' }, probe.message))
     }
 
     /**
@@ -1680,6 +2349,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
     function apply(ctx) {
       ctx.effect(() => installStyles(STYLE_ID, CSS), 'side-assistant: styles')
       ctx.effect(() => installStyles(SIDEBAR_ID, SIDEBAR_CSS), 'side-assistant: sidebar trim')
+      ctx.effect(() => installStyles(SETTINGS_ID, SETTINGS_CSS), 'side-assistant: settings styles')
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'side-assistant: dictionaries')
 
       const t = ctx.locale.bind(NS)
@@ -1800,6 +2470,20 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
         locale: NS,
         inject: () => actions,
       }, SideAssistantAction)), 'side-assistant: header action')
+
+      // Settings → Plugins, as one tab next to the read-only inventory. Unlike
+      // the shipped plugin pages this one has no settings namespace to wait for
+      // (`ctx.configForms.whileServed`), because the Host keeps this document in
+      // its own storage file rather than in the config schema — so the tab is
+      // injected unconditionally and reads its values over the plugin's route.
+      ctx.effect(() => ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+        name: 'settings.plugins.tab',
+        id: 'side-assistant',
+        order: 60,
+        label: () => t('title'),
+        locale: NS,
+        inject: () => ({}),
+      }, SideAssistantSettings)), 'side-assistant: settings page')
     }
 
     return { inject, apply }

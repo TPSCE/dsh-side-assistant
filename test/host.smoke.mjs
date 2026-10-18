@@ -1,5 +1,5 @@
 /**
- * Host-half smoke test for `dsh-side-assistant`.
+ * Host-half smoke test for `side-assistant`.
  *
  * Runs the real `apply()` against a fake Context and drives the real HTTP
  * handler with real request streams. Nothing here is shipped (see `files` in
@@ -14,12 +14,38 @@
  * Run: node test/host.smoke.mjs
  */
 import assert from 'node:assert/strict'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Readable } from 'node:stream'
 
 import { apply, inject } from '../index.js'
 
 const PATHS = {
   label: '侧边助手',
+}
+
+/** The progress context among a live Session's attached prompt contexts. */
+function progressOf(live) {
+  return live.attached.find((item) => item.name === 'side-assistant:progress')
+}
+
+/**
+ * Point the plugin's settings store at a throwaway `DSH_HOME` for one test.
+ *
+ * The real path is read on every mount, so swapping the variable here keeps the
+ * settings tests from writing into the developer's own profile.
+ * @returns the directory the test may inspect.
+ */
+function freshHome() {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-sa-home-'))
+  process.env.DSH_HOME = home
+  return home
+}
+
+/** The settings document the plugin would have written, as saved on disk. */
+function storedSettings(home) {
+  return JSON.parse(readFileSync(join(home, 'storages', 'side-assistant', 'settings.json'), 'utf8'))
 }
 
 /** One appendable fake Session. */
@@ -292,7 +318,7 @@ test('declares exactly the services it uses', () => {
   assert.deepEqual(inject, ['agents', 'subagents', 'sessions', 'sessionQuery', 'webServer'])
 })
 
-test('registers the three exact routes, the progress watchers and one lifetime effect', () => {
+test('registers the five exact routes, the progress watchers and one lifetime effect', () => {
   const { getRoute, effectLabels, routes } = mount(PATHS)
   const ensure = getRoute()
   assert.equal(ensure.kind, 'exact')
@@ -305,7 +331,19 @@ test('registers the three exact routes, the progress watchers and one lifetime e
   const preload = getRoute('/side-assistant/preload')
   assert.equal(preload.kind, 'exact')
   assert.equal(typeof preload.handler, 'function')
-  assert.deepEqual([...routes.keys()], ['/side-assistant/ensure', '/side-assistant/list', '/side-assistant/preload'])
+  const settings = getRoute('/side-assistant/settings')
+  assert.equal(settings.kind, 'exact')
+  assert.equal(typeof settings.handler, 'function')
+  const ping = getRoute('/side-assistant/ping')
+  assert.equal(ping.kind, 'exact')
+  assert.equal(typeof ping.handler, 'function')
+  assert.deepEqual([...routes.keys()], [
+    '/side-assistant/ensure',
+    '/side-assistant/list',
+    '/side-assistant/preload',
+    '/side-assistant/settings',
+    '/side-assistant/ping',
+  ])
   assert.deepEqual(effectLabels, [
     'side-assistant: progress on agent/created',
     'side-assistant: progress on session/event',
@@ -314,6 +352,8 @@ test('registers the three exact routes, the progress watchers and one lifetime e
     'side-assistant: /side-assistant/ensure',
     'side-assistant: /side-assistant/list',
     'side-assistant: /side-assistant/preload',
+    'side-assistant: /side-assistant/settings',
+    'side-assistant: /side-assistant/ping',
   ])
 })
 
@@ -398,6 +438,40 @@ test('the digest skips notices and stops at the last completed turn', async () =
   assert.match(digest.text, /改一下按钮/)
   assert.doesNotMatch(digest.text, /助手已收尾/, 'a settlement notice is not what the user said')
   assert.doesNotMatch(digest.text, /还没跑完的一步/, 'the turn in flight belongs to the progress blocks')
+})
+
+test('an assistant opened mid-turn folds the steps that turn already finished', async () => {
+  const { ctx, calls, getRoute } = mount(PATHS)
+  ctx.sessionQuery.events = [
+    { type: 'user/message', seq: 0, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '先前那个回合' }] } },
+    {
+      type: 'assistant/message',
+      seq: 1,
+      data: { turn: 1, step: 1, stream: stepStream({ thought: '旧想法', text: '先前那个回合的回答' }) },
+    },
+    { type: 'turn/end', seq: 2 },
+    // The turn running right now, and both steps finished before the child existed.
+    {
+      type: 'assistant/message',
+      seq: 3,
+      data: { turn: 2, step: 1, stream: stepStream({ thought: '先看看现状', text: '先读一下 README' }) },
+    },
+    {
+      type: 'assistant/message',
+      seq: 4,
+      data: { turn: 2, step: 2, stream: stepStream({ thought: '然后动手', text: '改 client.js' }) },
+    },
+  ]
+
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+
+  const text = progressOf(live).text
+  assert.match(text, /先读一下 README/, 'the step that finished before creation is in the index')
+  assert.match(text, /改 client\.js/, 'so is the newer one')
+  const digest = live.attached.find((entry) => entry.name === 'side-assistant:history')
+  assert.doesNotMatch(digest.text, /先读一下 README/, 'the running turn stays out of the written summary')
 })
 
 test('an older summarised line is dropped whole when the budget is exhausted', async () => {
@@ -922,8 +996,12 @@ function stepStream({ thought, text }) {
 /** A live child agent the Host half can attach the digest to. */
 function resumable(childId) {
   const attached = []
+  const tools = new Map()
+  const toolNames = []
   return {
     attached,
+    tools,
+    toolNames,
     agent: {
       id: childId,
       ctx: {
@@ -931,6 +1009,20 @@ function resumable(childId) {
           context(registered) {
             attached.push(registered)
           },
+        },
+        // The tool layer a real `agent.ctx` exposes: registering here lands in
+        // that agent's own scope, which is exactly what the plugin relies on.
+        get(name) {
+          if (name !== 'tools') return undefined
+          return {
+            register(definition) {
+              toolNames.push(definition.name)
+              tools.set(definition.name, definition)
+              return () => {
+                tools.delete(definition.name)
+              }
+            },
+          }
         },
       },
     },
@@ -954,10 +1046,10 @@ test('a parent step becomes prompt context, not a transcript message', async () 
   const live = resumable(calls.lastCreate.sessionId)
   ctx.emit('agent/created', { agent: live.agent })
 
-  assert.equal(live.attached.length, 1)
-  assert.equal(live.attached[0].name, 'side-assistant:progress')
-  assert.equal(live.attached[0].order, 125)
-  const text = live.attached[0].text
+  assert.equal(live.attached.filter((item) => item.name === 'side-assistant:progress').length, 1)
+  assert.equal(progressOf(live).name, 'side-assistant:progress')
+  assert.equal(progressOf(live).order, 125)
+  const text = progressOf(live).text
   assert.match(text, /先看看目录里有什么/)
   assert.match(text, /did: bash: \{"command":"ls -la"\} \(done\)/)
   assert.match(text, /目录里有一个 a\.md/)
@@ -979,7 +1071,7 @@ test('a block leads with a one-sentence conclusion, then tools, then thoughts', 
 
   const live = resumable(calls.lastCreate.sessionId)
   ctx.emit('agent/created', { agent: live.agent })
-  const text = live.attached[0].text
+  const text = progressOf(live).text
 
   const head = text.indexOf('[step 7]')
   const conclusion = text.indexOf('Conclusion: Already read a.md')
@@ -1005,7 +1097,7 @@ test('several blocks are laid out oldest first and the instruction walks them in
 
   const live = resumable(calls.lastCreate.sessionId)
   ctx.emit('agent/created', { agent: live.agent })
-  const text = live.attached[0].text
+  const text = progressOf(live).text
   const older = text.indexOf('[step 5]')
   const newer = text.indexOf('[step 7]')
   assert.ok(older !== -1 && newer !== -1)
@@ -1018,17 +1110,17 @@ test('the digest re-reads itself at every assembly, so a later step shows up', a
   await request(getRoute(), { body: { sessionId: 's1' } })
   const live = resumable(calls.lastCreate.sessionId)
   ctx.emit('agent/created', { agent: live.agent })
-  assert.equal(live.attached[0].text, '')
+  assert.equal(progressOf(live).text, '')
 
   ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', 9, {
     turn: 2,
     step: 1,
     stream: stepStream({ thought: '现在改文件', text: '改好了' }),
   }))
-  assert.match(live.attached[0].text, /现在改文件/)
+  assert.match(progressOf(live).text, /现在改文件/)
 })
 
-test('the digest keeps the newest blocks, bounded', async () => {
+test('the newest steps keep their detail while older ones become one line each', async () => {
   const { ctx, calls, getRoute } = mount(PATHS)
   await request(getRoute(), { body: { sessionId: 's1' } })
   const live = resumable(calls.lastCreate.sessionId)
@@ -1041,10 +1133,126 @@ test('the digest keeps the newest blocks, bounded', async () => {
       stream: stepStream({ thought: `thinking of step ${step}`, text: `answer of step ${step}` }),
     }))
   }
-  const text = live.attached[0].text
-  assert.equal((text.match(/\[step \d+\]/g) ?? []).length, 4)
-  assert.doesNotMatch(text, /thinking of step 1\b/)
+  const text = progressOf(live).text
+  // Five newest steps keep tools and reasoning; the four before them survive as headlines.
+  assert.match(text, /Newest steps \(in full, oldest first\):/)
+  assert.equal((text.match(/thought: thinking of step/g) ?? []).length, 5)
   assert.match(text, /thinking of step 9\b/)
+  assert.doesNotMatch(text, /thinking of step 4\b/)
+  assert.match(text, /Step index \(one line each, oldest first\):/)
+  for (const step of [1, 2, 3, 4]) assert.match(text, new RegExp(`\\[step ${step}\\] answer of step ${step}`))
+  const earlier = text.indexOf('Step index')
+  const newest = text.indexOf('Newest steps')
+  assert.ok(earlier !== -1 && newest > earlier, 'the one-line list comes before the full blocks')
+})
+
+test('an index line names the tools and targets, not just the conclusion', async () => {
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+
+  // One step with two tool calls: the exact case a prose summary used to lose.
+  ctx.emit('session/event', { id: 's1' }, parentEvent('tool/call', 1, {
+    name: 'bash',
+    callId: 'c1',
+    arguments: { command: 'node test/host.smoke.mjs' },
+  }))
+  ctx.emit('session/event', { id: 's1' }, parentEvent('tool/result', 2, { message: { callId: 'c1' } }))
+  ctx.emit('session/event', { id: 's1' }, parentEvent('tool/call', 3, {
+    name: 'edit',
+    callId: 'c2',
+    arguments: { path: 'client.js' },
+  }))
+  ctx.emit('session/event', { id: 's1' }, parentEvent('tool/result', 4, { message: { callId: 'c2' }, error: 'boom' }))
+  ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', 5, {
+    turn: 1,
+    step: 1,
+    stream: stepStream({ thought: '改一下按钮', text: '加了删除按钮，测试挂了。' }),
+  }))
+  // Six more steps push step 1 out of the detailed window, into the index.
+  for (let step = 2; step <= 7; step += 1) {
+    ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', step + 4, {
+      turn: 1,
+      step,
+      stream: stepStream({ thought: `thinking of step ${step}`, text: `answer of step ${step}` }),
+    }))
+  }
+  const text = progressOf(live).text
+  const line = text.split('\n').find((item) => item.includes('[step 1]')) ?? ''
+  assert.match(line, /bash:node test\/host\.smoke\./, 'the target is named, clipped to the index budget')
+  assert.match(line, /edit:client\.js/) 
+  assert.match(line, /✗/, 'a failed call is marked')
+  assert.match(line, /加了删除按钮/, 'the conclusion rides along')
+})
+
+test('the drill-down tool answers for one step, and only in the child’s own tool layer', async () => {
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+
+  assert.deepEqual(live.toolNames, ['side_assistant_read_steps'], 'registered once, in the child scope')
+  for (let step = 1; step <= 7; step += 1) {
+    ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', step, {
+      turn: 1,
+      step,
+      stream: stepStream({ thought: `thinking ${step}`, text: `answer of step ${step}` }),
+    }))
+  }
+  const tool = live.tools.get('side_assistant_read_steps')
+  assert.ok(tool.output?.render !== undefined, 'the registry contract requires a renderer')
+  // `register()` hands `parameters` to the provider verbatim (only `defineTool`
+  // compiles the property-map dialect), so a map here reaches the model as
+  // `type: null` and the turn fails with "Invalid schema for function".
+  assert.equal(tool.parameters?.type, 'object', 'parameters is object-rooted JSON Schema')
+  assert.equal(tool.parameters.properties?.from?.type, 'integer')
+  assert.equal(tool.parameters.properties?.query?.type, 'string')
+  assert.ok(Array.isArray(tool.parameters.required), 'parameters.required is an array')
+  // The registry validates `output.schema` as JSON Schema: `required` must be an
+  // array of names there (unlike the parameter dialect's `required: true`), and a
+  // wrong spelling only shows up as a thrown register, i.e. no tool at all.
+  assert.ok(Array.isArray(tool.output.schema.required), 'output schema uses JSON Schema required')
+  assert.deepEqual(tool.output.schema.required, ['text', 'steps'])
+  assert.equal(tool.output.schema.type, 'object')
+
+  const one = await tool.execute({ from: 2, to: 2 })
+  assert.equal(one.steps, 1)
+  assert.match(one.text, /\[step 2\]/)
+  assert.match(one.text, /thought: thinking 2/)
+  assert.match(one.text, /said: answer of step 2/)
+  assert.doesNotMatch(one.text, /\[step 3\]/)
+
+  const keyword = await tool.execute({ query: 'thinking 5' })
+  assert.equal(keyword.steps, 1)
+  assert.match(keyword.text, /\[step 5\]/)
+
+  const quoted = await tool.execute({ from: '3', to: '3' })
+  assert.equal(quoted.steps, 1, 'a step number the model quoted as a string still works')
+  assert.match(quoted.text, /\[step 3\]/)
+
+  const none = await tool.execute({ query: 'nothing like this' })
+  assert.equal(none.steps, 0)
+  assert.match(none.text, /Steps still kept: 1\.\.7/, 'it names the range it still holds')
+})
+
+test('the timeline is bounded on characters, oldest lines leaving first', async () => {
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+
+  for (let step = 1; step <= 300; step += 1) {
+    ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', step, {
+      turn: 1,
+      step,
+      stream: stepStream({ thought: `thinking ${step}`, text: `long answer of step ${step} `.padEnd(160, 'x') }),
+    }))
+  }
+  const text = progressOf(live).text
+  assert.ok(text.length < 20000, `the digest stays bounded, got ${text.length}`)
+  assert.match(text, /\[step 300\]/)
+  assert.doesNotMatch(text, /answer of step 1\b/)
 })
 
 test('events of another Session never reach an assistant', async () => {
@@ -1057,7 +1265,7 @@ test('events of another Session never reach an assistant', async () => {
     step: 1,
     stream: stepStream({ thought: '别的会话', text: '不该出现' }),
   }))
-  assert.equal(live.attached[0].text, '')
+  assert.equal(progressOf(live).text, '')
 })
 
 test('the menu adopts an assistant that predates a Host restart', async () => {
@@ -1066,13 +1274,13 @@ test('the menu adopts an assistant that predates a Host restart', async () => {
   await request(getRoute('/side-assistant/list'), { body: { sessionId: 's1' } })
   const live = resumable('child-old')
   ctx.emit('agent/created', { agent: live.agent })
-  assert.equal(live.attached.length, 1)
+  assert.equal(live.attached.filter((item) => item.name === 'side-assistant:progress').length, 1)
   ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', 1, {
     turn: 1,
     step: 1,
     stream: stepStream({ thought: '重启之后的新进展', text: '好了' }),
   }))
-  assert.match(live.attached[0].text, /重启之后的新进展/)
+  assert.match(progressOf(live).text, /重启之后的新进展/)
 })
 
 test('a restored pane adopts its assistant from the startup scan', async () => {
@@ -1087,8 +1295,8 @@ test('a restored pane adopts its assistant from the startup scan', async () => {
   }))
   const live = resumable('child-restored')
   await ctx.emit('agent/created', { agent: live.agent })
-  assert.equal(live.attached.length, 1)
-  assert.match(live.attached[0].text, /重启后还在推进/)
+  assert.equal(live.attached.filter((item) => item.name === 'side-assistant:progress').length, 1)
+  assert.match(progressOf(live).text, /重启后还在推进/)
   assert.equal(calls.create, 0)
 })
 
@@ -1114,8 +1322,8 @@ test('a thought that looks like a prompt variable cannot break the step', async 
   }))
   // The framework interpolates `{{name}}`; an unknown one aborts the step, so the
   // digest must not contain a live reference.
-  assert.doesNotMatch(live.attached[0].text, /\{\{conversation_id\}\}/)
-  assert.match(live.attached[0].text, /是不是要填/)
+  assert.doesNotMatch(progressOf(live).text, /\{\{conversation_id\}\}/)
+  assert.match(progressOf(live).text, /是不是要填/)
 })
 
 test('a refused creation leaves no digest behind', async () => {
@@ -1142,7 +1350,258 @@ test('a tool call without a result is still reported as pending', async () => {
     step: 1,
     stream: stepStream({ thought: '搜一下', text: '在搜' }),
   }))
-  assert.match(live.attached[0].text, /grep/)
+  assert.match(progressOf(live).text, /grep/)
+})
+
+
+// ---- settings board (v0.12.0) ----
+
+test('the settings route answers the shipped document with no secret in it', async () => {
+  freshHome()
+  const { getRoute } = mount(PATHS)
+  const result = await request(getRoute('/side-assistant/settings'), { method: 'GET' })
+  assert.equal(result.status, 200)
+  assert.equal(result.json.ok, true)
+  assert.deepEqual(result.json.limits, { steps: [1, 50], tokens: [500, 200000] })
+  assert.equal(result.json.settings.label, PATHS.label)
+  assert.equal(result.json.settings.opener, 'hello')
+  assert.equal(result.json.settings.steps, 5)
+  assert.equal(result.json.settings.tokens, 2000)
+  assert.equal(result.json.settings.style, 'brief')
+  assert.equal(result.json.settings.modelMode, 'inherit')
+  assert.equal(result.json.keyConfigured, false)
+  assert.equal('apiKey' in result.json.settings, false)
+})
+
+test('the settings route takes GET and POST only', async () => {
+  freshHome()
+  const { getRoute } = mount(PATHS)
+  const result = await request(getRoute('/side-assistant/settings'), { method: 'PUT' })
+  assert.equal(result.status, 405)
+  assert.equal(result.json.error, 'method-not-allowed')
+})
+
+test('a saved document survives a Host restart and drives the next composition', async () => {
+  const home = freshHome()
+  const first = mount(PATHS)
+  const saved = await request(first.getRoute('/side-assistant/settings'), {
+    body: {
+      settings: {
+        label: '小助手',
+        opener: '早上好',
+        modelMode: 'inherit',
+        steps: 1,
+        tokens: 1000,
+        style: 'detailed',
+      },
+    },
+  })
+  assert.equal(saved.json.ok, true)
+  assert.equal(saved.json.settings.label, '小助手')
+  assert.equal(storedSettings(home).steps, 1)
+
+  // A fresh mount is a Host restart: no memory of the save, only the file.
+  const second = mount(PATHS)
+  const press = await request(second.getRoute(), { body: { sessionId: 's1' } })
+  assert.equal(press.json.ok, true)
+  assert.equal(descriptorOf(second.calls).data.label, '小助手')
+  assert.equal(second.calls.lastMessage.content[0].text, '早上好')
+
+  // One full step is all the settings allow; the step before it becomes one line.
+  const live = resumable(second.calls.lastCreate.sessionId)
+  second.ctx.emit('agent/created', { agent: live.agent })
+  for (const step of [1, 2]) {
+    second.ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', step, {
+      turn: 1,
+      step,
+      stream: stepStream({ thought: `thinking of step ${step}`, text: `answer of step ${step}` }),
+    }))
+  }
+  const text = progressOf(live).text
+  assert.equal((text.match(/thought: thinking of step/g) ?? []).length, 1)
+  assert.match(text, /\[step 1\] answer of step 1/)
+  assert.match(text, /thought: thinking of step 2/)
+})
+
+test('an out-of-range document is clamped field by field, not rejected', async () => {
+  freshHome()
+  const { getRoute } = mount(PATHS)
+  const saved = await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { steps: 999, tokens: 1, style: 'poetic', label: '   ' } },
+  })
+  assert.equal(saved.json.ok, true)
+  assert.equal(saved.json.settings.steps, 50)
+  assert.equal(saved.json.settings.tokens, 500)
+  assert.equal(saved.json.settings.style, 'brief')
+  assert.equal(saved.json.settings.label, PATHS.label)
+})
+
+test('an API key is stored through credentials and never echoed back', async () => {
+  const home = freshHome()
+  const { getRoute, services } = mount(PATHS)
+  const stored = []
+  services.settings = {
+    describe() { return [{ ns: 'llm-pi-ai', revision: 1, value: { providers: {} } }] },
+    async update() {},
+  }
+  services.credentials = {
+    async set(ref, value) {
+      stored.push([ref, value])
+    },
+    async resolve(ref) {
+      const hit = stored.find(([name]) => name === ref)
+      return hit === undefined ? undefined : { value: hit[1] }
+    },
+  }
+  const saved = await request(getRoute('/side-assistant/settings'), {
+    body: {
+      settings: {
+        modelMode: 'custom',
+        custom: { baseURL: 'https://api.example.com/v1', model: 'my-model', apiKeyEnv: 'SIDE_ASSISTANT_API_KEY' },
+      },
+      apiKey: 'sk-test',
+    },
+  })
+  assert.deepEqual(stored, [['SIDE_ASSISTANT_API_KEY', 'sk-test']])
+  assert.equal(saved.json.keyConfigured, true)
+  assert.equal(JSON.stringify(saved.json).includes('sk-test'), false)
+  assert.equal(storedSettings(home).custom.baseURL, 'https://api.example.com/v1')
+})
+
+test('a custom endpoint is published as a pi-ai provider and used by the child', async () => {
+  freshHome()
+  const { getRoute, services, calls } = mount(PATHS)
+  const updates = []
+  services.settings = {
+    describe() {
+      return [{
+        ns: 'llm-pi-ai',
+        revision: 7,
+        value: { providers: { deepseek: { displayName: 'DeepSeek' } } },
+      }]
+    },
+    async update(ns, patch, revision) {
+      updates.push({ ns, patch, revision })
+    },
+  }
+  const saved = await request(getRoute('/side-assistant/settings'), {
+    body: {
+      settings: {
+        modelMode: 'custom',
+        custom: { baseURL: 'https://api.example.com/v1', model: 'my-model', apiKeyEnv: 'SIDE_ASSISTANT_API_KEY' },
+      },
+    },
+  })
+  assert.equal(saved.json.ok, true)
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].ns, 'llm-pi-ai')
+  assert.equal(updates[0].revision, 7)
+  const profile = updates[0].patch.providers['side-assistant-custom']
+  assert.equal(profile.baseURL, 'https://api.example.com/v1')
+  assert.deepEqual(profile.models, [{ id: 'my-model' }])
+  assert.equal(profile.apiKeyEnv, 'SIDE_ASSISTANT_API_KEY')
+  assert.deepEqual(Object.keys(updates[0].patch.providers).sort(), ['deepseek', 'side-assistant-custom'])
+
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  assert.equal(calls.lastCreate.agentOptions.provider, 'side-assistant-custom')
+  assert.equal(calls.lastCreate.agentOptions.model, 'my-model')
+})
+
+test('a custom endpoint without a base URL fails the save instead of half-writing', async () => {
+  const home = freshHome()
+  const { getRoute } = mount(PATHS)
+  const saved = await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { modelMode: 'custom', custom: { baseURL: '', model: 'my-model' } } },
+  })
+  assert.equal(saved.json.ok, false)
+  assert.equal(saved.json.error, 'missing-endpoint')
+  assert.throws(() => storedSettings(home))
+})
+
+test('host mode names the route the child runs', async () => {
+  freshHome()
+  const { getRoute, calls } = mount(PATHS)
+  await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { modelMode: 'host', provider: 'deepseek', model: 'deepseek-reasoner' } },
+  })
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  assert.equal(calls.lastCreate.agentOptions.provider, 'deepseek')
+  assert.equal(calls.lastCreate.agentOptions.model, 'deepseek-reasoner')
+})
+
+test('the ping route spends a few tokens to prove the route really works', async () => {
+  freshHome()
+  const { getRoute, services } = mount(PATHS)
+  services.settings = {
+    describe() { return [{ ns: 'llm-pi-ai', revision: 1, value: { providers: {} } }] },
+    async update() {},
+  }
+  await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { modelMode: 'host', provider: 'deepseek', model: 'deepseek-chat' } },
+  })
+  const asked = []
+  services.llm = {
+    stream(options) {
+      asked.push(options)
+      return (async function* relay() {
+        yield { type: 'text-delta', text: 'pong' }
+      })()
+    },
+  }
+  const result = await request(getRoute('/side-assistant/ping'), { body: {} })
+  assert.equal(result.json.ok, true)
+  assert.equal(result.json.provider, 'deepseek')
+  assert.equal(result.json.model, 'deepseek-chat')
+  assert.equal(result.json.text, 'pong')
+  assert.equal(typeof result.json.ms, 'number')
+  assert.equal(asked.length, 1)
+  assert.equal(asked[0].maxTokens <= 32, true)
+})
+
+test('a failed test call is reported with its own message, not as a crash', async () => {
+  freshHome()
+  const { getRoute, services } = mount(PATHS)
+  services.settings = {
+    describe() { return [{ ns: 'llm-pi-ai', revision: 1, value: { providers: {} } }] },
+    async update() {},
+  }
+  await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { modelMode: 'host', provider: 'deepseek', model: 'deepseek-chat' } },
+  })
+  services.llm = {
+    stream() {
+      return (async function* relay() {
+        throw new Error('401 unauthorized')
+      })()
+    },
+  }
+  const result = await request(getRoute('/side-assistant/ping'), { body: {} })
+  assert.equal(result.json.ok, false)
+  assert.equal(result.json.error, 'request-failed')
+  assert.match(result.json.message, /401 unauthorized/)
+})
+
+test('a ping with no route says so instead of guessing one', async () => {
+  freshHome()
+  const { getRoute } = mount(PATHS)
+  const result = await request(getRoute('/side-assistant/ping'), { body: {} })
+  assert.equal(result.json.ok, false)
+  assert.equal(result.json.error, 'no-route')
+})
+
+test('the answer style reaches the child as its own prompt fragment', async () => {
+  freshHome()
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { style: 'detailed' } },
+  })
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+  const style = live.attached.find((item) => item.name === 'side-assistant:style')
+  assert.ok(style, 'the style fragment is attached')
+  assert.equal(style.order, 118)
+  assert.match(style.text, /Answer style: detailed/)
 })
 
 let failed = 0

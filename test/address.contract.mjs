@@ -1,5 +1,5 @@
 /**
- * Address contract test for `dsh-side-assistant`.
+ * Address contract test for `side-assistant`.
  *
  * The browser half opens the side panel by handing a resource address to
  * `sidebarRight.openResource()`. That call has no fallback: an address no tab

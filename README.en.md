@@ -1,10 +1,10 @@
-# dsh-small-talk
+# side-assistant
 
 English · [中文](README.md) · [Repository](https://github.com/TPSCE/dsh-small-talk) · [AGPL-3.0](LICENSE)
 
 One press opens a **resident side assistant** for the current Session: it knows what this conversation has covered so far (as a compressed summary handed to it as prompt text — nothing of it shows up in its own chat log), you can keep asking it questions without interrupting the main task, and the top of the pane carries a **live progress strip** that folds into a single line — you see what the main Agent is doing and the newest thought at a glance, and unfolding it replays the last few steps of its chain of thought.
 
-Every step the main Agent finishes after that reaches the side assistant as a **progress block** (what it thought, which tools it called, what it concluded), so the side assistant is no longer limited to the moment it was created: ask "what is it doing now" and the answer comes from the newest block. Blocks travel through the system prompt, not the chat log (see [The progress strip](#the-progress-strip-what-the-main-agent-is-thinking)).
+Every step the main Agent finishes after that reaches the side assistant as a **progress block** (what it thought, which tools it called, what it concluded), so the side assistant is no longer limited to the moment it was created: ask "what is it doing now" and the answer comes from the newest block — while every earlier step stays on one index line (tools, target, status, conclusion), and the steps behind that are still readable through the assistant's own `side_assistant_read_steps` tool, so "what happened so far" and "what did step 12 change" are both answerable. Blocks travel through the system prompt, not the chat log (see [The progress strip](#the-progress-strip-what-the-main-agent-is-thinking)).
 
 The button sits at the right end of the conversation header. Press it and an independent conversation panel appears in the right sidebar: it knows what this Session talked about and did, and from then on you can ask it anything while the main Agent keeps running. When an assistant already exists, the press opens a menu first — **Assistant 1 / Assistant 2 / … / New assistant** — so you can reopen an older one or start another (each independent, each given the same summary of the history).
 
@@ -18,6 +18,7 @@ A side assistant **is not a subagent**: it never appears in the subagent catalog
 | --- | --- |
 | A side conversation pane with an input and a message stream | Carried by this plugin's own tab type; the chat itself is DSH's `conversation.content` factory (`embedded` variant) |
 | **Seeing the main Agent's live progress (tool calls + chain of thought)** | A progress strip drawn at the top of the pane; `session.follow` reads the main Session's event stream and assistant stream directly |
+| **An overview of tens or hundreds of steps, with drill-down** | The prompt carries one index line per step (tools + target + status + conclusion), the newest steps in full, and the assistant's own `side_assistant_read_steps` tool fetches anything older |
 | **The side assistant also learns what happened afterwards** | When the main Agent finishes a step, the Host folds that step into a block and writes it into the side assistant's system-prompt fragment (`side-assistant:progress`) — never into the chat log |
 | **Knowing the history the main Session already finished** | At creation the main Session's completed turns are folded into a summary and mounted as the prompt context `side-assistant:history` (order 120) — the assistant's own log starts at the greeting, so the pane shows no copy of the main conversation |
 | Asking again and again (a persistent assistant) | The Session carries its own `subagent/descriptor`; every question cold-resumes it, and the record stays |
@@ -25,6 +26,7 @@ A side assistant **is not a subagent**: it never appears in the subagent catalog
 | Surviving a close and reopen | The sidebar keeps open tabs per Session in localStorage |
 | Several assistants per Session, reopening any of them | A press opens the menu: existing ones numbered in creation order, plus "New assistant" at the end |
 | **Two shortcut cards under the answer** | Two rounded rectangles mounted into `conversation.input.dock`: `What is this project about?` / `What is the agent working on?`. A click sends it as if typed (`conversation.send`, the composer's own path) |
+| **A model, a context budget and an answer style of your own** | Settings → Plugins → Side assistant: three model modes (follow the main session / host model / custom OpenAI-compatible endpoint), an API key stored through credentials, a *Test connection* that really sends a request, the full-step count, the token budget and brief/detailed (see "Settings: model, context, answer style") |
 
 ## What it deliberately does **not** do
 
@@ -52,11 +54,20 @@ dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk/archive/ref
 Refresh the page afterwards; if the button does not appear, restart `dsh web`
 (the Host half's new routes need a fresh process).
 
+To iterate on local code, install this directory instead (same code, no network).
+The path contains a space — **quote it**:
+
+```sh
+dsh plugin --profile web add "/Users/a123/Desktop/small talk/dsh-side-assistant"
+```
+
+You can also install from the plugin page of the Web UI: paste the repository URL,
+or pick this local directory.
 
 Uninstall:
 
 ```sh
-dsh plugin --profile web remove dsh-side-assistant
+dsh plugin --profile web remove side-assistant
 ```
 
 ## Usage
@@ -191,9 +202,25 @@ What folds is the **display**, not the subscription: `session.follow` stays conn
 
 It is implemented with `ctx.remote.session.follow({ "address": { kind: "session", sessionId: main Session }, assistantStream: true })`: one subscription yields the snapshot (events that already happened plus the compact prefix of the running attempt) and every delta after it, and it disconnects when the pane closes. Expanding the compact stream records (`reasoning-chunks` → individual deltas) is reimplemented locally, because the framework's helper is not on the `require` face of the browser half.
 
-**Those blocks also reach the side assistant — through the system prompt, not the chat log.** Every time the main Agent finishes a step, the Host folds that step into a block (conclusion + tool calls + thought) and mounts it into the side assistant Session's system-prompt fragment `side-assistant:progress` (order 125, right after the delegation statement). The first line of each block is a **one-sentence conclusion**: the first sentence of the step's own closing text, or — when the step only ran tools — an action summary such as "Conclusion: this step only used tools (read, bash) …". Tool actions come next and the raw thoughts last: conclusion first, detail after, so "what is it doing now" gets a sentence instead of a wall of thinking. With several blocks in hand it walks them oldest to newest (one sentence each) and lands on the newest, so what you see is "first it did this, then that, and now it is here" rather than a pile of parallel fragments. Blocks never enter the log: the pane still holds only your conversation with the assistant, and the history summary still stops at creation time (see [Known boundaries](#known-boundaries) item 1).
+**Those blocks also reach the side assistant — through the system prompt, not the chat log.** Every time the main Agent finishes a step, the Host folds that step into a block (conclusion + tool calls + thought) and mounts it into the side assistant Session's system-prompt fragment `side-assistant:progress` (order 125, right after the delegation statement). The first line of each block is a **one-sentence conclusion**: the first sentence of the step's own closing text, or — when the step only ran tools — an action summary such as "Conclusion: this step only used tools (read, bash) …". Tool actions come next and the raw thoughts last: conclusion first, detail after, so "what is it doing now" gets a sentence instead of a wall of thinking. With several blocks in hand it walks them oldest to newest (one sentence each) and lands on the newest, so what you see is "first it did this, then that, and now it is here" rather than a pile of parallel fragments. Ask about an earlier step and it answers from the index lines below — or drills into the original text with its own tool — and says which step numbers its copy covers, instead of claiming it only ever got the last few. Blocks never enter the log: the pane still holds only your conversation with the assistant, and the history summary still stops at creation time (see [Known boundaries](#known-boundaries) item 1).
 
-Limits and cost: at most 4 blocks (200 characters of thought, 120 of conclusion, 3 tools × 60 characters each per block; older ones roll off). A full injection is usually a few hundred characters — deliberately: a long injection crowds out what you actually want to discuss and turns "see it at a glance" into reading a report. Each block change changes the system prompt, so the prompt cache is invalidated — a deliberate trade: live progress beats cache hits. The fragment text is a getter, recomputed at every prompt assembly, so a step that landed after you asked but before the model spoke is already in there.
+**The cap and its cost: index lines plus a drill-down tool.** A step's "one line" is no longer a sentence but an index entry:
+
+```
+[step 12] bash:node test/host.smoke.mjs✗, edit:client.js — added the delete button
+```
+
+what it ran, on what, whether it worked, and the conclusion — roughly 60–90 characters. Three layers then cover different ground:
+
+| Layer | Covers | Cap |
+| --- | --- | --- |
+| Full blocks | the newest steps, thoughts + tools + conclusion | 5 steps by default (Settings: 1..50) |
+| Index lines | every step before them | 200 lines, character budget follows the context budget (default 6000 chars ≈ seventy steps) |
+| Drill-down | the last 400 steps the Host still keeps | 40 steps / 8000 chars per call |
+
+The drill-down is the assistant's **own tool**, `side_assistant_read_steps({from, to, query})`: asked "what did step 12 change" or "which step touched client.js", it fetches the original text itself instead of the Host guessing how much to stuff into the prompt. It registers in the side assistant's own tool scope (`tools.register` off `agent.ctx`), so the main Agent and real subagents never see it; a cold resume re-attaches it from `agent/created`, and each call returns at most 40 steps and states the range it actually read, saying so plainly when the request goes past what it still holds.
+
+A full injection is usually a few hundred characters — deliberately: a long injection crowds out what you actually want to discuss and turns "see it at a glance" into reading a report. Each block change changes the system prompt, so the prompt cache is invalidated — a deliberate trade: live progress beats cache hits. The fragment text is a getter, recomputed at every prompt assembly, so a step that landed after you asked but before the model spoke is already in there.
 
 ### Deleting an assistant: in the menu, archive first, then close the tab
 
@@ -232,6 +259,39 @@ row, the quota strip and the queue bar). Since 0.11.2 the rule hides **only the 
 are direct children of the anchor, so they stay; every other entry (git row, quota, queue, todo) is
 still kept out of the pane.
 
+## Settings: model, context, answer style
+
+**Settings → Plugins → Side assistant** (since 0.12.0) — one tab next to the read-only plugin inventory inside the Plugins
+settings section. Nothing restarts when you save; assistants you open
+afterwards work the new way.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Model | Follow the main session | **Follow the main session** keeps the main Agent's provider/model; **Host model** takes a provider + model the host already configured (set those up in Settings → Models); **Custom endpoint** takes a Base URL, a model name and an API key, which the host writes as `llm-pi-ai`'s `providers.side-assistant-custom` — so a custom endpoint shares the built-in providers' retries, credential resolution and model listing |
+| API key | — | Stored through the credentials service (reference name defaults to `SIDE_ASSISTANT_API_KEY`); it never enters the settings file and is never read back — the page only says `已配置` |
+| Test connection | — | Makes one real, tiny request (`maxTokens ≤ 16`) and reports the round trip and the provider/model actually used. A configuration that resolves is not a configuration that works; only the wire proves it |
+| Full steps kept | 5 | 1..50; older steps fold into one line each |
+| Context budget (tokens) | 2000 | 500..200 000; one token buys roughly three characters of index and two of history summary |
+| Answer style | Brief | **Brief** is a sentence or two; **Detailed** explains what each step did, why, and which files moved |
+| Name / greeting | 侧边助手 / hello | Only affects assistants created afterwards |
+
+It lives in `~/.dsh/storages/side-assistant/settings.json` (root overridable through `DSH_HOME`): one small JSON
+document, and a damaged one falls back field by field instead of taking the panel down.
+
+Deliberate boundaries:
+
+- **No `Config` schema**: this is the plugin's own file, not a DSH settings namespace. Saving takes effect
+  immediately, needs no restart and is not bound to schema validation; the trade-off is that these keys do not
+  show up in a `dsh config` style view.
+- **The row stays the baseline**: `label`/`opener` in `cordis.patch.yml` are the defaults; whatever the page saved
+  wins.
+- **The style is live, the rest is fixed at creation**: the answer style rides a prompt context
+  (`side-assistant:style`, order 118) and reaches the next `agent/created`; the name and greeting are written into
+  the descriptor and only affect assistants created later; the step count only affects folding from then on —
+  lines already folded are not expanded again.
+- **The custom key goes through credentials**: the page can never read it back, and saving with a blank key leaves
+  the stored one alone.
+
 ## Configuration
 
 The `config` in `cordis.patch.yml` is passed to `apply(ctx, config)` unchanged; every key is optional:
@@ -250,7 +310,7 @@ Example:
 ```yaml
 - insert:
     - id: side-assistant
-      name: dsh-side-assistant
+      name: side-assistant
       config:
         label: 我的助手
         reasoningEffort: low   # enable thinking like this
@@ -318,8 +378,11 @@ Host  index.js                              Browser  client.js
 16. **The approval policy is pinned to `never` inside the creation window** (the same semantics as the old delegation path): a side assistant should not do things that need your approval. When it does try, it gets a refusal instead of an approval prompt dangling in the sidebar. To loosen it, change `capturePolicyOverrides()` / `appendPolicyOverrides()` in `index.js`.
 17. **The strip only subscribes while the pane is open**; when the main Session is closed or archived it shows "unreadable" instead of erroring, and it does not subscribe to the side assistant's own Session (the chat below already shows that). Folding only changes the display: the subscription stays, and the dot and the "unreadable" line keep updating. Retention is bounded: 6 thought blocks × 4000 characters, 30 tool rows, older ones roll off; after a remount the strip backfills from "the last few steps in the snapshot", and anything earlier was never in the sidebar to begin with (the main view's own record still has it).
 18. **The fold preference is not persisted.** It lives in a module variable in `client.js`, so a refresh returns to folded; using `localStorage` would add a piece of durable state that needs cleaning up for a pure UI detail — not worth it yet.
-19. **Progress blocks live in memory only, and only in one direction.** The block table is a `Map` in `index.js`; a Host restart empties it (the assistant is still there, only "new progress from now on" starts accumulating again). Every block is bounded (200 characters of thought, 120 of conclusion, 3 tools × 60 characters), at most 4 blocks, older ones roll off; the conclusion is the first sentence of that step's text, not a summary the model rewrote. A block holds no user words from the main Session and no turn boundaries, only the steps the main Agent walked after the assistant was created (or adopted from the menu). Cold resume behaves the same: every question re-mounts the fragment, so the first question after a restart sees the blocks accumulated since the restart.
+19. **Progress blocks live in memory only, and only in one direction.** The block table is a `Map` in `index.js`; a Host restart empties it (the assistant is still there, only "new progress from now on" starts accumulating again). Every block is bounded (200 characters of thought, 120 of conclusion, 3 tools × 60 characters), by default at most 5 blocks (configurable 1..50 in Settings), older ones fold into one index line each and that index is bounded too; the Host additionally keeps the last 400 steps verbatim, handed out only through the assistant's own `side_assistant_read_steps` tool (an in-process `Map`, empty after a restart); the conclusion is the first sentence of that step's text, not a summary the model rewrote. A block holds no user words from the main Session and no turn boundaries, only the steps the main Agent walked after the assistant was created (or adopted from the menu) — and creation backfills: if the main Agent is mid-turn when the assistant is born, the steps that turn has already finished are folded into its index, so opening one mid-turn no longer starts blank (the step being written still waits for its own close). Cold resume behaves the same: every question re-mounts the fragment, so the first question after a restart sees the blocks accumulated since the restart.
 20. **The input starts one line tall and scrolls inside the box past 336px.** It starts one line shorter than the main composer; growth, ceiling and scrolling all match afterwards. To make it identical, delete the `min-height` and `inset` rules in `SIDEBAR_CSS`.
+21. **Settings are the plugin's own file, not a DSH settings namespace.** `~/.dsh/storages/side-assistant/settings.json` is read and written by the plugin itself (`GET`/`POST /side-assistant/settings`), so a save takes effect without a restart and never appears in a `dsh config` style view. Three consequences are worth knowing: the name and greeting are written into the descriptor of **newly created** sessions, so changing them only affects assistants created afterwards; the full-step count only affects folding from then on (lines already folded are not expanded again); and **a custom endpoint is written as the `llm-pi-ai` provider `side-assistant-custom`**, so it also shows up in Settings → Models — it is the same kind of thing as a hand-added provider, and it is removed from there too.
+22. **Test connection really sends a request** (`maxTokens ≤ 16`), so it proves "this route works", not "this configuration is syntactically valid". In follow-the-main-session mode there is no definite provider/model, and the button says so instead of guessing.
+23. **The answer style is the only live setting.** It rides the prompt context `side-assistant:style` (order 118), so the next `agent/created` picks it up — existing assistants start answering in the new style immediately. Everything else is either fixed at creation or only affects later folding.
 
 ## Tests
 
@@ -335,7 +398,7 @@ All three use fake Contexts, a fake DOM and fake fetch, so DSH does not have to 
 
 ## License
 
-Copyright (C) 2026 the dsh-side-assistant authors.
+Copyright (C) 2026 the side-assistant authors.
 
 This program is free software: you can redistribute it and/or modify it under the terms of the **GNU Affero General Public License, version 3** (AGPL-3.0), as published by the Free Software Foundation — either version 3 of the License, or (at your option) any later version.
 
