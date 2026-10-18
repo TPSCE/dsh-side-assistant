@@ -319,6 +319,31 @@ const STYLE_CONTEXT_NAME = 'side-assistant:style'
 const STYLE_CONTEXT_ORDER = 118
 
 /**
+ * Prompt context listing the parent Session's background jobs.
+ *
+ * A side assistant reads the main agent's steps, and a step that started a job
+ * says only "started it". What the job is doing — still running, how far, what it
+ * last printed — lives in the job registry, keyed by the *parent* session, so the
+ * plugin has to carry it across: the child's own `job_list` sees its own jobs and
+ * never the main agent's.
+ */
+const JOBS_CONTEXT_NAME = 'side-assistant:jobs'
+const JOBS_CONTEXT_ORDER = 122
+
+/** How many jobs the prompt section lists, and how long one line may be. */
+const JOBS_LISTED = 8
+const JOB_LABEL_CHARS = 70
+
+/** The job-tail tool a side assistant carries next to the step drill-down. */
+const READ_JOB_TOOL = 'side_assistant_read_job'
+
+/** How much of one job's output the tail tool returns. */
+const READ_JOB_CHARS = 4000
+
+/** A settled job stays interesting for this long after it finishes. */
+const JOB_RECENT_MS = 10 * 60 * 1000
+
+/**
  * Everything the Settings page can change, with the values the plugin ships.
  *
  * `tokens` is a context budget, not an answer length: one token buys roughly
@@ -850,7 +875,142 @@ function readStepsTool(record) {
   }
 }
 
-/** Agents that already carry the drill-down tool, so a second attach cannot duplicate it. */
+/** How long ago in the shortest form that still reads as time; `''` when unknown. */
+function agoText(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) return 'now'
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return `${String(seconds)}s ago`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${String(minutes)}m ago`
+  return `${String(Math.round(minutes / 60))}h ago`
+}
+
+/** One job, on one line: what runs, how far, and how long it has been at it. */
+function jobLine(job, now) {
+  const label = clipLine(String(job?.label ?? ''), JOB_LABEL_CHARS)
+  const parts = [String(job?.id ?? 'a job'), String(job?.status ?? 'unknown')]
+  if (label !== '') parts.push(label)
+  const progress = String(job?.progress ?? '').trim()
+  if (progress !== '') parts.push(progress)
+  if (job?.status === 'running' || job?.status === 'stopping') {
+    const since = now - Number(job?.startedAt ?? now)
+    const ago = agoText(since)
+    if (ago !== '') parts.push(ago)
+  } else {
+    const detail = String(job?.detail ?? '').trim()
+    if (detail !== '') parts.push(detail)
+    const took = Number(job?.finishedAt ?? 0) - Number(job?.startedAt ?? 0)
+    const ago = agoText(took)
+    if (ago !== '') parts.push(`took ${ago}`)
+  }
+  return parts.join('  ')
+}
+
+/**
+ * Render the parent Session's background jobs as prompt text.
+ *
+ * The child's own `job_list` is fenced to its own session, so a step that started
+ * a job would otherwise read as "started something" with no way to see how it is
+ * going. Live jobs come first — they are what a "what is the agent doing" question
+ * turns on — then the ones that settled recently, which still explain the output
+ * an index line does not carry.
+ * @param jobs - the Host job registry, when the composition has one.
+ * @param parentSessionId - the session whose jobs the child should see.
+ * @returns the context text; `''` when there is nothing worth saying.
+ */
+function renderJobs(jobs, parentSessionId) {
+  if (jobs === undefined || typeof jobs.list !== 'function') return ''
+  let listed = []
+  try {
+    listed = jobs.list(parentSessionId) ?? []
+  } catch (error) {
+    return ''
+  }
+  const now = Date.now()
+  const live = listed.filter((job) => job?.status === 'running' || job?.status === 'stopping')
+  const recent = listed.filter((job) => {
+    if (job === null || typeof job !== 'object') return false
+    if (job.status === 'running' || job.status === 'stopping') return false
+    const finishedAt = Number(job.finishedAt ?? 0)
+    return finishedAt > 0 && now - finishedAt <= JOB_RECENT_MS
+  })
+  const picked = [...live, ...recent].slice(0, JOBS_LISTED)
+  if (picked.length === 0) return ''
+  const lines = [
+    'Background jobs the main session started (read from the job registry, fenced to that session — your own job_list sees only your own jobs, so use this list):',
+  ]
+  for (const job of picked) lines.push(`  ${jobLine(job, now)}`)
+  if (live.length > 0) {
+    lines.push(`A running job is still changing: when the user asks what it is doing or how it is going, call the tool \`${READ_JOB_TOOL}\` with its id and answer from the output tail it returns. Do not guess output.`)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * The job-tail tool: the output side of the job list above.
+ *
+ * Same shape as the step drill-down — the index says a job exists, this says what
+ * it printed — and the same closing over one child, so there is no session
+ * argument the model could get wrong.
+ * @param record - the child's digest state.
+ * @param jobs - the Host job registry.
+ * @returns the tool definition, ready for `tools.register`.
+ */
+function readJobTool(record, jobs) {
+  return {
+    name: READ_JOB_TOOL,
+    description:
+      'Read the tail of the output of a background job the main session started. The system prompt lists those jobs with their status; call this when the user asks what a running job is doing or how a finished one ended. Returns the last part of what the job printed, so say it is a tail when the output was cut.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        job: {
+          type: 'string',
+          description: 'Job id from the job list, such as bash-3.',
+        },
+      },
+      required: ['job'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          text: { type: 'string' },
+          job: { type: 'string' },
+          status: { type: 'string' },
+        },
+        required: ['text', 'job', 'status'],
+      },
+      render: (args, value) => [{ type: 'text', text: String(value?.text ?? '') }],
+    },
+    async execute(args) {
+      const id = String(args?.job ?? '').trim()
+      if (id === '') return { text: 'No job id was given; pass the id from the job list.', job: '', status: 'unknown' }
+      try {
+        const view = jobs.get(id, record.parentSessionId)
+        const read = jobs.readAt(id, 0, record.parentSessionId)
+        const chunks = Array.isArray(read?.chunks) ? read.chunks : []
+        const whole = chunks.map((chunk) => String(chunk?.text ?? '')).join('')
+        const cut = read?.lossy === true || whole.length > READ_JOB_CHARS
+        const tail = whole.length > READ_JOB_CHARS ? whole.slice(whole.length - READ_JOB_CHARS) : whole
+        const head = `${id} is ${String(view?.status ?? 'unknown')}${view?.detail ? ` (${String(view.detail)})` : ''}.`
+        const body = tail.trim() === '' ? 'It has not printed anything yet.' : `${cut ? 'Tail of its output (earlier bytes were dropped):' : 'Its output:'}\n${tail.trim()}`
+        return { text: `${head}\n${body}`, job: id, status: String(view?.status ?? 'unknown') }
+      } catch (error) {
+        return {
+          text: `No job \`${id}\` belongs to the main session, or its output is gone: ${messageOf(error)}`,
+          job: id,
+          status: 'unknown',
+        }
+      }
+    },
+  }
+}
+
+/** Agents that already carry their tools, so a second attach cannot duplicate them. */
 const stepTools = new WeakSet()
 
 /**
@@ -864,18 +1024,24 @@ const stepTools = new WeakSet()
  * @param warn - the Host logger, threaded in because this helper lives outside `apply`.
  * @returns nothing.
  */
-function attachStepTools(agent, record, warn) {
+function attachTools(agent, record, jobs, warn) {
   if (agent === null || typeof agent !== 'object' || stepTools.has(agent)) return
   const tools = agent.ctx?.get?.('tools')
   if (tools === undefined || typeof tools.register !== 'function') {
-    warn('side-assistant: the agent has no tools service; the step index has no drill-down tool')
+    warn('side-assistant: the agent has no tools service; the step index and the job list have no drill-down tools')
     return
   }
+  stepTools.add(agent)
   try {
     tools.register(readStepsTool(record))
-    stepTools.add(agent)
   } catch (error) {
     warn(`side-assistant: could not register ${READ_STEPS_TOOL}: ${messageOf(error)}`)
+  }
+  if (jobs === undefined || typeof jobs.readAt !== 'function') return
+  try {
+    tools.register(readJobTool(record, jobs))
+  } catch (error) {
+    warn(`side-assistant: could not register ${READ_JOB_TOOL}: ${messageOf(error)}`)
   }
 }
 
@@ -1133,7 +1299,21 @@ export function apply(ctx, config) {
         warn(`side-assistant: could not attach the history summary: ${messageOf(error)}`)
       }
     }
-    attachStepTools(agent, record, warn)
+    const jobs = ctx.get('jobs')
+    if (typeof jobs?.list === 'function') {
+      try {
+        prompt.context({
+          name: JOBS_CONTEXT_NAME,
+          order: JOBS_CONTEXT_ORDER,
+          get text() {
+            return renderJobs(jobs, record.parentSessionId)
+          },
+        })
+      } catch (error) {
+        warn(`side-assistant: could not attach the job list: ${messageOf(error)}`)
+      }
+    }
+    attachTools(agent, record, jobs, warn)
     try {
       prompt.context({
         name: PROGRESS_CONTEXT_NAME,

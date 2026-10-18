@@ -43,7 +43,7 @@
  * with scoped CSS rather than by taking over the `conversation.composer` chain.
  */
 window.__ModuleLoader__.load({
-  id: 'side-assistant',
+  id: 'dsh-side-assistant',
   factory(require) {
     const React = require('react')
     const h = React.createElement
@@ -866,7 +866,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
 }
 
 [data-sidebar-chat] [data-composer-placeholder]::before {
-  content: "ask me anything you wanna know~";
+  content: "ask anything～";
   font-size: var(--dsh-content-font-size, 14px);
 }
 
@@ -1114,7 +1114,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
       const selector = `style[data-plugin-css=${JSON.stringify(id)}]`
       if (document.querySelector(selector) !== null) return () => {}
       const tag = document.createElement('style')
-      tag.dataset.plugin = 'side-assistant'
+      tag.dataset.plugin = 'dsh-side-assistant'
       tag.dataset.pluginCss = id
       tag.textContent = text
       document.head.appendChild(tag)
@@ -2065,12 +2065,16 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
     }
 
     /**
-     * Settings → Plugins → side assistant.
+     * The side assistant's own page in Settings.
      *
-     * Registered into `settings.plugins.tab` — the tab strip inside
-     * Settings → Plugins — not `plugins.item`, which belongs to the plugin
-     * manager panel (no `configForms.whileServed` either: this plugin owns no
-     * settings namespace, its document lives in its own storage file).
+     * Registered into `settings.section` — the left-hand list next to General,
+     * Models and Plugins — not `plugins.item` (the plugin manager panel) and not
+     * `settings.plugins.tab` (a tab buried inside the Plugins section). A
+     * `settings.section` row is a list entry: it needs an `id`, an `order` and a
+     * `label`, and the component owns its own heading. There is no
+     * `configForms.whileServed` either: this plugin owns no settings namespace,
+     * its document lives in its own storage file, so the page is registered
+     * unconditionally.
      * The page reads the current settings once on mount, writes them back as one
      * flat object, and can ping the Host to prove the chosen model answers.
      *
@@ -2476,14 +2480,14 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
       // (`ctx.configForms.whileServed`), because the Host keeps this document in
       // its own storage file rather than in the config schema — so the tab is
       // injected unconditionally and reads its values over the plugin's route.
-      ctx.effect(() => ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-        name: 'settings.plugins.tab',
+      ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
+        name: 'settings.section',
         id: 'side-assistant',
-        order: 60,
+        order: 12,
         label: () => t('title'),
         locale: NS,
         inject: () => ({}),
-      }, SideAssistantSettings)), 'side-assistant: settings page')
+      }, SideAssistantSettings)), 'side-assistant: settings section')
     }
 
     return { inject, apply }

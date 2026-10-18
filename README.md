@@ -1,6 +1,6 @@
-# side-assistant
+# dsh-side-assistant
 
-[English](README.en.md) · 中文 · [仓库](https://github.com/TPSCE/dsh-small-talk) · [AGPL-3.0](LICENSE)
+[English](README.en.md) · 中文 · [仓库](https://github.com/TPSCE/dsh-side-assistant) · [更新日志](CHANGELOG.md) · [AGPL-3.0](LICENSE)
 
 给当前会话一键开一个**常驻侧边助手**：它知道这个会话此前聊了什么（以一段压缩摘要的形式，不进它的聊天记录），
 可以反复追问，不会打断主任务；
@@ -29,11 +29,12 @@
 | **侧助手也知道之后发生了什么** | 主 Agent 每完成一个 step，宿主把这一步折成一块写进侧助手的系统提示片段（`side-assistant:progress`），不进聊天记录 |
 | **知道主会话已完成的历史** | 建会话时把主会话已完成回合压成一段摘要，作为系统提示片段 `side-assistant:history`（order 120）——它自己的日志从开场白开始，侧栏里看不到主对话 |
 | 可反复追问（持久化侧助手） | 会话自带 `subagent/descriptor`，每次提问按需冷恢复，记录一直留着 |
+| **看得见主会话的后台任务** | job 注册表按会话围栏，侧助手自己的 `job_list` 只看得见自己的任务，所以宿主把主会话的 job 搬进提示片段 `side-assistant:jobs`（order 122），再配一个 `side_assistant_read_job` 取输出尾部 |
 | **一个都不占子智能体名额** | 用 `ctx.agents.create()` 建游离会话，**不追加** `subagent/catalog` 事实 |
 | 关掉再开不丢 | 侧栏按会话把打开的标签页存进 localStorage |
 | 一个会话多个侧助手、换一个重开 | 按一下弹菜单：已有的按创建顺序编号，末尾另有「新建助手」 |
 | **回答下面两颗快捷卡片** | `conversation.input.dock` 里挂两颗圆角矩形卡片：`这个项目是在干什么？` / `agent 正在进行什么工作？`。点一下等于自己打出来发出去（`conversation.send`，和输入框同一条路） |
-| **模型、上下文预算、回答风格可自定义** | 设置 → 插件 → 侧边助手：模型三种模式（跟随主会话 / 指定宿主模型 / 自定义 OpenAI 兼容端点）、API Key 走 credentials、真的发一次请求的「测试连接」、完整 step 条数、token 预算、简约/详细（见「设置：模型、上下文、回答风格」） |
+| **模型、上下文预算、回答风格可自定义** | 设置 → 侧边助手（和「通用」「模型」「插件市场」并列的独立一栏）：模型三种模式（跟随主会话 / 指定宿主模型 / 自定义 OpenAI 兼容端点）、API Key 走 credentials、真的发一次请求的「测试连接」、完整 step 条数、token 预算、简约/详细（见「设置：模型、上下文、回答风格」） |
 
 ## 它**不**做什么（有意为之）
 
@@ -58,13 +59,13 @@
 profile 是 `web` 的话，直接从仓库安装：
 
 ```sh
-dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk.git
+dsh plugin --profile web add https://github.com/TPSCE/dsh-side-assistant.git
 ```
 
 不想让 pnpm 走 `git clone`（网络慢、或者本机没装 git）就用 tarball，一次 HTTPS 下载：
 
 ```sh
-dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk/archive/refs/heads/main.tar.gz
+dsh plugin --profile web add https://github.com/TPSCE/dsh-side-assistant/archive/refs/heads/main.tar.gz
 ```
 
 装完刷新页面；如果按钮没出现，重启 `dsh web`（Host 半区的新路由需要重新加载进程）。
@@ -72,7 +73,7 @@ dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk/archive/ref
 改本地代码时可以改装这个目录（装的是同一份代码，只是绕过网络）。路径含空格，**务必加引号**：
 
 ```sh
-dsh plugin --profile web add "/Users/a123/Desktop/small talk/dsh-side-assistant"
+dsh plugin --profile web add "~/code/dsh-side-assistant"
 ```
 
 也可以从 Web 界面的插件页安装：粘贴仓库地址，或选这个本地目录。
@@ -80,7 +81,7 @@ dsh plugin --profile web add "/Users/a123/Desktop/small talk/dsh-side-assistant"
 卸载：
 
 ```sh
-dsh plugin --profile web remove side-assistant
+dsh plugin --profile web remove dsh-side-assistant
 ```
 
 ## 使用
@@ -172,7 +173,7 @@ dsh plugin --profile web remove side-assistant
 提示语是真实渲染出来的文本节点（`[data-composer-placeholder]`，与可编辑区同级），CSS 换不掉，
 所以做法是：把原文字号压成 0 藏起来，再用 `::before` 画上自己的。
 
-> ask me anything you wanna know~
+> ask anything～
 
 只有输入框可用时才替换。不可用 / 离线 / 被拦截时，原提示语是**状态**而不是装饰，
 那几条规则会把它放回来——判据是同一父节点里可编辑区的 `aria-disabled="true"`。
@@ -292,6 +293,22 @@ user 消息，所以它会在面板里显示成一个用户气泡——见「已
 一份完整注入通常一两千字——刻意的：注入太长会挤掉你真正想聊的内容。块一变，提示词缓存就失效一次——
 实时进展比缓存命中重要。片段文本是 getter，每次拼提示词时重算，所以用户提问之后、模型开口之前刚落下的那一步也在里面。
 
+### 后台任务：job 与 shell 进程
+
+主 Agent 的每一步里，后台命令只留下一句「启动了 `bash-3`」；它跑得怎么样，在 job 注册表里。侧助手拿不到那份数据——`job_list` 是按会话围栏的，它自己的调用只看得见自己的任务。所以宿主把**主会话的任务**搬过来，挂在系统提示片段 `side-assistant:jobs`（order 122，在历史摘要之后、进展块之前）：
+
+```
+bash-3  running  npm test  2/5  2m ago
+bash-2  completed  pnpm build  exit code: 0  took 34s
+```
+
+- 列的是**正在跑的和最近十分钟内结束的**，最多 8 条，一行一条：id、状态、命令（截到 70 字）、进度行、用时或结局。
+- 要看输出就调第二个工具 `side_assistant_read_job({job})`，返回尾部最多 4000 字符（被裁会说清「这是尾部」）。它读的是保留输出窗口的**绝对偏移**（`readAt`），不动主 Agent 自己的读取游标——否则就把它该看的那段吃掉了。
+- 两个工具都注册在侧助手自己的工具层（`agent.ctx`），主 Agent 和真正的子智能体都看不见；job 注册表不存在时这段提示与这个工具都不出现，面板照常工作。
+
+边界：侧栏里的**交互式终端**不属于 job 注册表，宿主也没有列举它们的服务，所以这里看不到；
+子智能体 job 会以 `subagent-N` 出现，但它们的产出去子会话日志，不在输出环里，尾部读起来是空的。
+
 ### 删除助手：在菜单里，先归档再关标签页
 
 删除按钮跟着它要删的东西走：再点一次头部按钮打开菜单，每个「助手 N」右边就是一颗 **删除**——两个字，
@@ -336,7 +353,7 @@ user 消息，所以它会在面板里显示成一个用户气泡——见「已
 
 ## 设置：模型、上下文、回答风格
 
-**设置 → 插件 → 侧边助手**（0.12.0 起）：设置里「插件」那一段，和只读的「插件清单」并排的一个标签页。保存后不用重启，新开的助手按新设置工作。
+**设置 → 侧边助手**（0.15.2 起；0.12.0–0.15.1 它藏在「设置 → 插件」的标签页里）：设置对话框左侧导航里独立的一栏，和「通用」「模型」「插件市场」并列，不点进「插件」也能找到。保存后不用重启，新开的助手按新设置工作。
 
 | 设置项 | 默认 | 说明 |
 | --- | --- | --- |
@@ -378,8 +395,8 @@ user 消息，所以它会在面板里显示成一个用户气泡——见「已
 
 ```yaml
 - insert:
-    - id: side-assistant
-      name: side-assistant
+    - id: dsh-side-assistant
+      name: dsh-side-assistant
       config:
         label: 我的助手
         reasoningEffort: low   # 想让它带思考，就这样打开
@@ -488,7 +505,7 @@ Host  index.js                             浏览器  client.js
    `dsh-client-ui-conversation` 的渲染细节，比槽名更容易变。失效的表现分别是「按钮又回来了」和
    「提示语又变回官方那句」，两者都不影响功能。
 10. **提示语只在不可用 / 离线 / 被拦截时才让位。** 计划模式、引导排队这两种状态也会被换成
-    「ask me anything you wanna know~」——它们不是错误态，但也不是这个面板要表达的重点；想让它们也保留原文，
+    「ask anything～」——它们不是错误态，但也不是这个面板要表达的重点；想让它们也保留原文，
     把 `SIDEBAR_CSS` 里那两条 `:has(> [data-placeholder][aria-disabled="true"])` 规则的条件放宽即可。
 11. **开场那句 `hello` 会在面板里显示成一个用户气泡。** 它是真实的 user 消息（DSH 固定这么投递，
     插件改不了角色），而面板渲染的就是这个会话的记录。现在它的日志从这句开场白开始（历史是摘要、不是种子），
@@ -551,7 +568,7 @@ hook 运行时（尊重依赖数组，能安装/卸载 effect），能把按钮�
 
 ## 许可
 
-Copyright (C) 2026 the side-assistant authors.
+Copyright (C) 2026 the dsh-side-assistant authors.
 
 本程序是自由软件：你可以依照 **GNU Affero 通用公共许可证第 3 版**（AGPL-3.0，由自由软件基金会发布）
 重新发布和/或修改它——第 3 版，或者（按你的选择）任何更新版本。

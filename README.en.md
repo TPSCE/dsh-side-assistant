@@ -1,6 +1,6 @@
-# side-assistant
+# dsh-side-assistant
 
-English · [中文](README.md) · [Repository](https://github.com/TPSCE/dsh-small-talk) · [AGPL-3.0](LICENSE)
+English · [中文](README.md) · [Repository](https://github.com/TPSCE/dsh-side-assistant) · [Changelog](CHANGELOG.md) · [AGPL-3.0](LICENSE)
 
 One press opens a **resident side assistant** for the current Session: it knows what this conversation has covered so far (as a compressed summary handed to it as prompt text — nothing of it shows up in its own chat log), you can keep asking it questions without interrupting the main task, and the top of the pane carries a **live progress strip** that folds into a single line — you see what the main Agent is doing and the newest thought at a glance, and unfolding it replays the last few steps of its chain of thought.
 
@@ -22,11 +22,12 @@ A side assistant **is not a subagent**: it never appears in the subagent catalog
 | **The side assistant also learns what happened afterwards** | When the main Agent finishes a step, the Host folds that step into a block and writes it into the side assistant's system-prompt fragment (`side-assistant:progress`) — never into the chat log |
 | **Knowing the history the main Session already finished** | At creation the main Session's completed turns are folded into a summary and mounted as the prompt context `side-assistant:history` (order 120) — the assistant's own log starts at the greeting, so the pane shows no copy of the main conversation |
 | Asking again and again (a persistent assistant) | The Session carries its own `subagent/descriptor`; every question cold-resumes it, and the record stays |
+| **Seeing the main Session's background jobs** | The job registry is fenced per Session and the assistant's own `job_list` only sees its own jobs, so the Host carries the main Session's jobs into the prompt fragment `side-assistant:jobs` (order 122) and adds a `side_assistant_read_job` tool for the output tail |
 | **Taking no subagent slot at all** | Created with `ctx.agents.create()` as a detached Session — **no** `subagent/catalog` fact is appended |
 | Surviving a close and reopen | The sidebar keeps open tabs per Session in localStorage |
 | Several assistants per Session, reopening any of them | A press opens the menu: existing ones numbered in creation order, plus "New assistant" at the end |
 | **Two shortcut cards under the answer** | Two rounded rectangles mounted into `conversation.input.dock`: `What is this project about?` / `What is the agent working on?`. A click sends it as if typed (`conversation.send`, the composer's own path) |
-| **A model, a context budget and an answer style of your own** | Settings → Plugins → Side assistant: three model modes (follow the main session / host model / custom OpenAI-compatible endpoint), an API key stored through credentials, a *Test connection* that really sends a request, the full-step count, the token budget and brief/detailed (see "Settings: model, context, answer style") |
+| **A model, a context budget and an answer style of your own** | Settings → Side assistant, its own entry next to General, Models and Plugins: three model modes (follow the main session / host model / custom OpenAI-compatible endpoint), an API key stored through credentials, a *Test connection* that really sends a request, the full-step count, the token budget and brief/detailed (see "Settings: model, context, answer style") |
 
 ## What it deliberately does **not** do
 
@@ -41,14 +42,14 @@ A side assistant **is not a subagent**: it never appears in the subagent catalog
 For a `web` profile, install straight from the repository:
 
 ```sh
-dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk.git
+dsh plugin --profile web add https://github.com/TPSCE/dsh-side-assistant.git
 ```
 
 If you would rather not have pnpm run `git clone` (slow network, or no git on the
 machine), use the tarball — a single HTTPS download:
 
 ```sh
-dsh plugin --profile web add https://github.com/TPSCE/dsh-small-talk/archive/refs/heads/main.tar.gz
+dsh plugin --profile web add https://github.com/TPSCE/dsh-side-assistant/archive/refs/heads/main.tar.gz
 ```
 
 Refresh the page afterwards; if the button does not appear, restart `dsh web`
@@ -58,7 +59,7 @@ To iterate on local code, install this directory instead (same code, no network)
 The path contains a space — **quote it**:
 
 ```sh
-dsh plugin --profile web add "/Users/a123/Desktop/small talk/dsh-side-assistant"
+dsh plugin --profile web add "~/code/dsh-side-assistant"
 ```
 
 You can also install from the plugin page of the Web UI: paste the repository URL,
@@ -67,7 +68,7 @@ or pick this local directory.
 Uninstall:
 
 ```sh
-dsh plugin --profile web remove side-assistant
+dsh plugin --profile web remove dsh-side-assistant
 ```
 
 ## Usage
@@ -139,7 +140,7 @@ While the main conversation runs, its primary button **becomes** Stop. The side 
 
 The placeholder is real rendered text (`[data-composer-placeholder]`, a sibling of the editable area), so CSS cannot replace it. The approach: shrink the original to `font-size: 0` and paint our own with `::before`.
 
-> ask me anything you wanna know~
+> ask anything～
 
 This only applies while the input is usable. When it is unavailable / offline / blocked the original text is **state**, not decoration, and those rules put it back — the test is `aria-disabled="true"` on the editable area in the same parent. The accessibility name still comes from the original `aria-label` in every case (screen readers hear the official sentence, with the `/` and `@` hints).
 
@@ -222,6 +223,21 @@ The drill-down is the assistant's **own tool**, `side_assistant_read_steps({from
 
 A full injection is usually a few hundred characters — deliberately: a long injection crowds out what you actually want to discuss and turns "see it at a glance" into reading a report. Each block change changes the system prompt, so the prompt cache is invalidated — a deliberate trade: live progress beats cache hits. The fragment text is a getter, recomputed at every prompt assembly, so a step that landed after you asked but before the model spoke is already in there.
 
+### Background jobs: jobs and shell processes
+
+In the main Agent's steps a background command leaves one line — "started `bash-3`" — and nothing about how it is going. That lives in the job registry, and the assistant cannot reach it: `job_list` is fenced per Session, so its own calls see only its own jobs. So the Host carries the **main Session's jobs** across, as the prompt fragment `side-assistant:jobs` (order 122, after the history summary and before the progress blocks):
+
+```
+bash-3  running  npm test  2/5  2m ago
+bash-2  completed  pnpm build  exit code: 0  took 34s
+```
+
+- It lists what is **running plus what settled in the last ten minutes**, at most 8, one line each: id, status, command (clipped at 70 characters), progress line, and either elapsed time or the outcome.
+- For the output, the second tool `side_assistant_read_job({job})` returns up to 4000 characters of the tail (and says so when it was cut). It reads the retained window by **absolute offset** (`readAt`), so it never moves the main Agent's own reading cursor — which would eat output it still has to see.
+- Both tools register in the assistant's own tool layer (`agent.ctx`); the main Agent and real subagents never see them. With no job registry the fragment and the tool are simply absent, and the pane works as before.
+
+Boundaries: **interactive terminals** in the sidebar are not in the job registry and the Host has no service that lists them, so they are not visible here; subagent jobs do show up as `subagent-N`, but their product goes to the child Session log rather than the output ring, so the tail reads empty.
+
 ### Deleting an assistant: in the menu, archive first, then close the tab
 
 The delete control lives next to the thing it deletes: press the header button again to open the menu and every `助手 N` row has a **Delete** on its right — two characters, paid for out of the row's width instead of the progress strip, and no "which assistant does the button at the right end delete?" to remember. The label follows the system language (`删除` in `zh`, `Delete` in `en`).
@@ -261,9 +277,9 @@ still kept out of the pane.
 
 ## Settings: model, context, answer style
 
-**Settings → Plugins → Side assistant** (since 0.12.0) — one tab next to the read-only plugin inventory inside the Plugins
-settings section. Nothing restarts when you save; assistants you open
-afterwards work the new way.
+**Settings → Side assistant** (since 0.15.2; from 0.12.0 to 0.15.1 it was a tab buried under Settings → Plugins) — one entry
+in the dialog's left-hand list, next to General, Models and Plugins, so it no longer hides inside the Plugins section.
+Nothing restarts when you save; assistants you open afterwards work the new way.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -309,8 +325,8 @@ Example:
 
 ```yaml
 - insert:
-    - id: side-assistant
-      name: side-assistant
+    - id: dsh-side-assistant
+      name: dsh-side-assistant
       config:
         label: 我的助手
         reasoningEffort: low   # enable thinking like this
@@ -369,7 +385,7 @@ Host  index.js                              Browser  client.js
 7. **It depends on the shipped conversation view and right sidebar.** The chat itself comes from `dsh-client-ui-conversation`'s `conversation.content` factory (`dsh-client-ui-chat` draws the message stream) and the tab from `ui-sidebar-right`; disable them and the pane either fails to open or keeps only the progress strip. Nothing crashes when they are missing: the pane services are requested separately with `ctx.inject`, and a failing chat area shows a line "侧边对话加载失败" instead of a blank.
 8. **It stays out of the Session list.** Sessions with `origin === 'subagent'` are already filtered out of the workspace list, which is exactly what we want: zero pollution.
 9. **The input trim rests on two DOM contracts**: `data-sidebar-chat` on the pane root (now set by this plugin) and the slot anchors `div[data-slot="<slot>"]`. If the former breaks, only the reach of the trim rules changes; the latter is an external contract (a renderer setting, `display: contents`, and DSH's own stylesheet selects on it), worth a second look on a major DSH upgrade. The failure mode is "some controls are back", never an error and never a broken feature. The same goes for the message action row and the placeholder, which also depend on `data-actions-reveal` (assistant footers only), `data-composer-placeholder` and the editor's `aria-disabled` — all rendering details of `dsh-client-ui-chat` / `dsh-client-ui-conversation`, likelier to change than slot names. Their failure modes are "the buttons are back" and "the placeholder is the official one again", neither of which breaks anything.
-10. **The placeholder yields only when the input is unavailable / offline / blocked.** Plan mode and steer-queueing also show `ask me anything you wanna know~` — they are not errors, but they are not what this pane is about; to keep their original text too, loosen the condition of the two `:has(> [data-placeholder][aria-disabled="true"])` rules in `SIDEBAR_CSS`.
+10. **The placeholder yields only when the input is unavailable / offline / blocked.** Plan mode and steer-queueing also show `ask anything～` — they are not errors, but they are not what this pane is about; to keep their original text too, loosen the condition of the two `:has(> [data-placeholder][aria-disabled="true"])` rules in `SIDEBAR_CSS`.
 11. **The opener `hello` shows up as a user bubble.** It is a real user message (DSH delivers it that way and the plugin cannot change the role) and the pane renders this Session's record. Its log now starts at that greeting (history is a summary, not a seed), so "the first user bubble" *is* the opener and a positional hide would be safe — the plugin still does not hide it; configure `opener: ""` if you do not want it.
 12. **Thinking levels are adapter-specific.** The DeepSeek adapter accepts `off | low | high | max`; the plugin does not validate. An unsupported value makes **Session creation fail** with `UNSUPPORTED_REASONING_EFFORT` — set `inherit` then. To change an existing assistant mid-flight, use the model picker in the pane (it carries effort levels).
 13. **The menu asks again on every press; nothing is cached.** Create or delete an assistant in another tab and the next press shows it without a refresh. The cost is one `POST /side-assistant/list` per click; it reads the Session index and this layer's catalog, not Session logs.
@@ -398,7 +414,7 @@ All three use fake Contexts, a fake DOM and fake fetch, so DSH does not have to 
 
 ## License
 
-Copyright (C) 2026 the side-assistant authors.
+Copyright (C) 2026 the dsh-side-assistant authors.
 
 This program is free software: you can redistribute it and/or modify it under the terms of the **GNU Affero General Public License, version 3** (AGPL-3.0), as published by the Free Software Foundation — either version 3 of the License, or (at your option) any later version.
 

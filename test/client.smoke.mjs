@@ -281,7 +281,7 @@ test('styles, trim, dictionaries, the panel and the header action are effects', 
     'side-assistant: chat tab body',
     'side-assistant: suggestion cards',
     'side-assistant: header action',
-    'side-assistant: settings page',
+    'side-assistant: settings section',
   ])
   assert.equal(styleTags.length, 3)
   assert.deepEqual(
@@ -301,7 +301,7 @@ test('the panel services are requested separately from the required ones', () =>
     'sidebar.right.pane.tab',
     'conversation.input.dock',
     'conversation.session.header.actions',
-    'settings.plugins.tab',
+    'settings.section',
   ])
 })
 
@@ -364,7 +364,7 @@ test('the trim stylesheet is pane-scoped and hides the composer clutter', () => 
 
   // The placeholder is repainted, and only while the composer is usable.
   assert.ok(css.includes('[data-sidebar-chat] [data-composer-placeholder]'))
-  assert.ok(css.includes('content: "ask me anything you wanna know~"'))
+  assert.ok(css.includes('content: "ask anything～"'))
   assert.ok(
     css.includes(':has(> [data-placeholder][aria-disabled="true"])'),
     'the state placeholder must win over ours',
@@ -1454,8 +1454,8 @@ function settingsPayload(overrides = {}) {
 /** Mount the settings page with its own hook slots. */
 function renderSettings(extra = {}) {
   const mounted = mount()
-  const entry = mounted.registered.find((row) => row.options.name === 'settings.plugins.tab')
-  assert.ok(entry, 'the settings page must be registered into settings.plugins.tab')
+  const entry = mounted.registered.find((row) => row.options.name === 'settings.section')
+  assert.ok(entry, 'the settings page must be registered into settings.section')
   unmount()
   hookSlots = []
   const dictionary = mounted.getLocale().dictionaries.zh
@@ -1482,12 +1482,12 @@ function textOf(node) {
   return (node.children ?? []).map(textOf).join('')
 }
 
-test('the settings page registers as a settings tab with its dictionary title', () => {
+test('the settings page registers as a settings section with its dictionary title', () => {
   const mounted = mount()
-  const entry = mounted.registered.find((row) => row.options.name === 'settings.plugins.tab')
-  assert.ok(entry, 'settings.plugins.tab must carry the settings page')
+  const entry = mounted.registered.find((row) => row.options.name === 'settings.section')
+  assert.ok(entry, 'settings.section must carry the settings page')
   assert.equal(entry.options.id, 'side-assistant')
-  assert.equal(entry.options.order, 60)
+  assert.equal(entry.options.order, 12)
   assert.equal(entry.options.locale, 'sideAssistant')
   assert.deepEqual(entry.options.inject(), {})
   assert.equal(entry.options.label(), mounted.getLocale().dictionaries.zh.title)

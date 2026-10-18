@@ -3,7 +3,7 @@
 # conversation-header button. `config` is passed straight to `apply(ctx, config)`
 # and every key below is optional — omit a key to take its built-in default.
 - insert:
-    - id: side-assistant
-      name: side-assistant
+    - id: dsh-side-assistant
+      name: dsh-side-assistant
       config:
         label: 侧边助手

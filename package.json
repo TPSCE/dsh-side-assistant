@@ -1,6 +1,6 @@
 {
-  "name": "side-assistant",
-  "version": "0.14.1",
+  "name": "dsh-side-assistant",
+  "version": "0.15.2",
   "private": true,
   "type": "module",
   "description": "给当前会话开一个侧边助手：主会话已完成的历史压成摘要、之后每一步进展（想法、工具、结论）以系统提示片段推送，面板顶部另有一条默认折叠的实时进展条；回答下方两颗快捷卡片，助手可在菜单里删除（归档），面板内的聊天记录不再复制主对话。",
@@ -15,6 +15,7 @@
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "dsh": {
@@ -34,10 +35,10 @@
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TPSCE/dsh-small-talk.git"
+    "url": "git+https://github.com/TPSCE/dsh-side-assistant.git"
   },
-  "homepage": "https://github.com/TPSCE/dsh-small-talk#readme",
+  "homepage": "https://github.com/TPSCE/dsh-side-assistant#readme",
   "bugs": {
-    "url": "https://github.com/TPSCE/dsh-small-talk/issues"
+    "url": "https://github.com/TPSCE/dsh-side-assistant/issues"
   }
 }

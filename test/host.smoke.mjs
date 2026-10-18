@@ -1186,6 +1186,58 @@ test('an index line names the tools and targets, not just the conclusion', async
   assert.match(line, /加了删除按钮/, 'the conclusion rides along')
 })
 
+test('the prompt lists the main session’s jobs, and the tail tool reads one', async () => {
+  const { ctx, calls, services, getRoute } = mount(PATHS)
+  const reads = []
+  const now = Date.now()
+  services.jobs = {
+    list(sessionId) {
+      assert.equal(sessionId, 's1', 'the job list is fenced to the main session')
+      return [
+        { id: 'bash-3', kind: 'bash', label: 'npm test', status: 'running', progress: '2/5', startedAt: now - 120000 },
+        { id: 'bash-2', kind: 'bash', label: 'pnpm build', status: 'completed', detail: 'exit code: 0', startedAt: now - 600000, finishedAt: now - 540000 },
+        { id: 'bash-1', kind: 'bash', label: 'ancient command', status: 'completed', detail: 'exit code: 0', startedAt: now - 7200000, finishedAt: now - 7100000 },
+      ]
+    },
+    get(id, sessionId) {
+      assert.equal(sessionId, 's1')
+      return { id, status: 'running' }
+    },
+    readAt(id, from, sessionId) {
+      reads.push({ id, from, sessionId })
+      return { chunks: [{ text: 'line 1\n' }, { text: 'line 2\n' }], next: 14, lossy: false }
+    },
+  }
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+
+  const jobs = live.attached.find((entry) => entry.name === 'side-assistant:jobs')
+  assert.ok(jobs !== undefined, 'the job list is attached to the child')
+  assert.equal(jobs.order, 122, 'between the history summary and the progress blocks')
+  const text = jobs.text
+  assert.match(text, /bash-3\s+running\s+npm test\s+2\/5/, 'a running job names what it runs and how far')
+  assert.match(text, /bash-2\s+completed\s+pnpm build/, 'a job that settled recently stays listed')
+  assert.doesNotMatch(text, /ancient command/, 'a job from an hour ago is old news')
+
+  const tool = live.tools.get('side_assistant_read_job')
+  assert.ok(tool !== undefined, 'the tail tool rides along')
+  assert.equal(tool.parameters.required?.[0], 'job')
+  const answer = await tool.execute({ job: 'bash-3' })
+  assert.equal(answer.job, 'bash-3')
+  assert.match(answer.text, /line 2/, 'the tail comes back')
+  assert.deepEqual(reads, [{ id: 'bash-3', from: 0, sessionId: 's1' }], 'reads retained output, never the model cursor')
+})
+
+test('with no job registry, the prompt says nothing about jobs', async () => {
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+  assert.equal(live.attached.some((entry) => entry.name === 'side-assistant:jobs'), false)
+  assert.deepEqual(live.toolNames, ['side_assistant_read_steps'], 'no job tool without a registry')
+})
+
 test('the drill-down tool answers for one step, and only in the child’s own tool layer', async () => {
   const { ctx, calls, getRoute } = mount(PATHS)
   await request(getRoute(), { body: { sessionId: 's1' } })
