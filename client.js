@@ -1288,7 +1288,15 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
         setDeletingChild(childId)
         Promise.resolve()
           .then(() => onDelete(childId))
-          .catch((error) => {
+          .then(() => {
+            // The row is gone, so nothing may stay armed or busy: the guard at
+            // the top of this callback reads `deletingChild`, and a value left
+            // behind there swallows every later delete in the same menu.
+            if (!alive.current) return
+            setDeletingChild(null)
+            setFailedChild(null)
+            setArmedChild(null)
+          }, (error) => {
             setDeletingChild(null)
             setFailedChild(childId)
             console.warn('[side-assistant] delete failed', error)
