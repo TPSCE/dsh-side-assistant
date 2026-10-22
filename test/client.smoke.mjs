@@ -1380,6 +1380,36 @@ test('deleting the only assistant closes the menu', async () => {
   assert.equal(collect(tree, isMenu).length, 0, 'an emptied menu has nothing to show')
 })
 
+test('a second delete still works after the first one succeeded', async () => {
+  // The in-flight guard reads a state value; if a successful delete left it
+  // set, every later press would return before doing anything.
+  let listCalls = 0
+  globalThis.fetch = async (url) => {
+    if (url !== '/side-assistant/list') return json({ ok: true, childId: 'C3', created: true })
+    listCalls += 1
+    const assistants = listCalls === 1
+      ? [assistant('C1', 1), assistant('C2', 2)]
+      : listCalls === 2 ? [assistant('C2', 2)] : []
+    return json({ ok: true, assistants })
+  }
+
+  const session = renderAction()
+  let tree = await press(session, collect(session.draw(), isTrigger)[0])
+  tree = await press(session, menuDeletes(tree)[0])
+  tree = await press(session, menuDeletes(tree)[0])
+  assert.deepEqual(deleteLabels(tree), ['删除'], 'the survivor is back to one press')
+
+  tree = await press(session, menuDeletes(tree)[0])
+  assert.deepEqual(deleteLabels(tree), ['确认'], 'the second row asks once too')
+  tree = await press(session, menuDeletes(tree)[0])
+
+  assert.deepEqual(session.mounted.archived, [
+    { sessionId: 'C1', options: { stopActivity: true } },
+    { sessionId: 'C2', options: { stopActivity: true } },
+  ], 'the second delete reaches the archive as well')
+  assert.equal(collect(tree, isMenu).length, 0, 'both rows are gone, so the menu closes')
+})
+
 test('a failed delete stays on screen and says so', async () => {
   globalThis.fetch = async (url) => (url === '/side-assistant/list'
     ? json({ ok: true, assistants: [assistant('C1', 1)] })
