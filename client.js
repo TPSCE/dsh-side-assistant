@@ -93,6 +93,8 @@ window.__ModuleLoader__.load({
       settingsCustomHint: 'OpenAI 兼容端点：宿主会把它注册成一个名为 side-assistant-custom 的 provider',
       settingsContext: '上下文',
       settingsSteps: '进度保留的完整 step 条数',
+      settingsDepth: '子智能体最大递归深度',
+      settingsDepthHint: '1 = 只看直接子级；最多 5 级',
       settingsTokens: '上下文预算上限（token）',
       settingsStyle: '回答风格',
       settingsStyleBrief: '简约',
@@ -150,6 +152,8 @@ window.__ModuleLoader__.load({
       settingsCustomHint: 'OpenAI-compatible endpoint: the host registers it as a provider named side-assistant-custom',
       settingsContext: 'Context',
       settingsSteps: 'Full steps kept in the progress digest',
+      settingsDepth: 'Subagent recursion depth',
+      settingsDepthHint: '1 = direct children only; at most 5',
       settingsTokens: 'Context budget ceiling (tokens)',
       settingsStyle: 'Answer style',
       settingsStyleBrief: 'Brief',
@@ -1984,11 +1988,12 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
       custom: { baseURL: '', model: '', apiKeyEnv: 'SIDE_ASSISTANT_API_KEY' },
       steps: 5,
       tokens: 2000,
+      subagentDepth: 1,
       style: 'brief',
     }
 
     /** Field ranges the Host enforces; the page clamps to them before saving. */
-    const SETTINGS_LIMITS = { steps: [1, 50], tokens: [500, 200000] }
+    const SETTINGS_LIMITS = { steps: [1, 50], tokens: [500, 200000], subagentDepth: [1, 5] }
 
     /**
      * Coerce one number field into a whole number inside its range.
@@ -2037,6 +2042,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
         },
         steps: wholeNumber(source.steps, SETTINGS_LIMITS.steps, base.steps),
         tokens: wholeNumber(source.tokens, SETTINGS_LIMITS.tokens, base.tokens),
+        subagentDepth: wholeNumber(source.subagentDepth, SETTINGS_LIMITS.subagentDepth, base.subagentDepth),
         style: ANSWER_STYLES.includes(source.style) ? source.style : base.style,
       }
     }
@@ -2120,6 +2126,9 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
               setLimits({
                 steps: Array.isArray(payload.limits.steps) ? payload.limits.steps : SETTINGS_LIMITS.steps,
                 tokens: Array.isArray(payload.limits.tokens) ? payload.limits.tokens : SETTINGS_LIMITS.tokens,
+                subagentDepth: Array.isArray(payload.limits.subagentDepth)
+                  ? payload.limits.subagentDepth
+                  : SETTINGS_LIMITS.subagentDepth,
               })
             }
           })
@@ -2150,6 +2159,7 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
         },
         steps: wholeNumber(form.steps, limits.steps, SETTINGS_DEFAULTS.steps),
         tokens: wholeNumber(form.tokens, limits.tokens, SETTINGS_DEFAULTS.tokens),
+        subagentDepth: wholeNumber(form.subagentDepth, limits.subagentDepth, SETTINGS_DEFAULTS.subagentDepth),
         style: form.style,
       })
 
@@ -2304,7 +2314,17 @@ ${TRIMMED_SLOTS.map((key) => `[data-sidebar-chat] [data-slot="${key}"]`).join(',
             step: 1,
             value: form.tokens,
             onChange: numbered('tokens'),
-          }))))
+          })),
+          field(copy('settingsDepth'), h('input', {
+            className: 'dsh-sa-settings-input',
+            type: 'number',
+            name: 'subagentDepth',
+            min: limits.subagentDepth[0],
+            max: limits.subagentDepth[1],
+            step: 1,
+            value: form.subagentDepth,
+            onChange: numbered('subagentDepth'),
+          }), copy('settingsDepthHint'))))
 
       const styleSection = h('section', { className: 'dsh-sa-settings-group' },
         h('h3', { className: 'dsh-sa-settings-group-title' }, copy('settingsStyle')),

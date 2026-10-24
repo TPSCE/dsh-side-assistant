@@ -293,6 +293,26 @@ const STEP_THOUGHT_CHARS = 600
 const STEP_STORE_STEPS = 400
 
 /**
+ * The subagent tool, and how far it walks the parent's catalog.
+ *
+ * Depth 1 is the default because a direct child is what "the main agent handed
+ * this off to" usually means. How much deeper one call may walk is the user's
+ * setting (`subagentDepth`, 1..{@link SUBAGENT_DEPTH_CEILING}), so a chain that
+ * delegated twice can still be read without one call turning into a crawl.
+ */
+const READ_SUBAGENT_TOOL = 'side_assistant_read_subagent'
+/** Depth the tool walks when neither the argument nor the setting says otherwise. */
+const SUBAGENT_DEFAULT_DEPTH = 1
+/**
+ * Hard ceiling for the walk, and for the setting that picks it.
+ *
+ * The depth is a setting because "how far down do I care about" is the user's
+ * call, not the model's: a chain two levels deep is common, three is not, and
+ * past a handful of levels a list stops being an overview of anything.
+ */
+const SUBAGENT_DEPTH_CEILING = 5
+
+/**
  * Where the user's own settings live.
  *
  * Every knob used to be a row field in the profile patch: right for a deployment,
@@ -360,11 +380,16 @@ const DEFAULT_SETTINGS = {
   custom: { baseURL: '', model: '', apiKeyEnv: DEFAULT_API_KEY_ENV },
   steps: PROGRESS_BLOCKS,
   tokens: 2000,
+  subagentDepth: SUBAGENT_DEFAULT_DEPTH,
   style: 'brief',
 }
 
 /** Ranges the Settings page renders and the host enforces, in that order. */
-const SETTINGS_LIMITS = { steps: [1, 50], tokens: [500, 200000] }
+const SETTINGS_LIMITS = {
+  steps: [1, 50],
+  tokens: [500, 200000],
+  subagentDepth: [1, SUBAGENT_DEPTH_CEILING],
+}
 
 /**
  * Coerce one raw number into a whole number inside its range.
@@ -406,6 +431,12 @@ function normalizeSettings(raw, fallback = DEFAULT_SETTINGS) {
     },
     steps: wholeNumber(source.steps, SETTINGS_LIMITS.steps[0], SETTINGS_LIMITS.steps[1], fallback.steps),
     tokens: wholeNumber(source.tokens, SETTINGS_LIMITS.tokens[0], SETTINGS_LIMITS.tokens[1], fallback.tokens),
+    subagentDepth: wholeNumber(
+      source.subagentDepth,
+      SETTINGS_LIMITS.subagentDepth[0],
+      SETTINGS_LIMITS.subagentDepth[1],
+      fallback.subagentDepth,
+    ),
     style: ANSWER_STYLES.includes(source.style) ? source.style : fallback.style,
   }
 }
@@ -875,6 +906,237 @@ function readStepsTool(record) {
   }
 }
 
+/** The short form of a session id, for listings and headers. */
+function shortId(id) {
+  const text = String(id ?? '')
+  return text.length > 8 ? text.slice(0, 8) : text
+}
+
+/** One catalog row, on one line: id, label, whether it is running, its depth. */
+function subagentLine(entry) {
+  const label = clipLine(String(entry?.label ?? ''), INDEX_CONCLUSION_CHARS)
+  const parts = [shortId(entry?.id)]
+  if (label !== '') parts.push(label)
+  parts.push(String(entry?.activity ?? 'unknown'))
+  if (Number.isFinite(entry?.depth)) parts.push(`depth ${String(entry.depth)}`)
+  return parts.join('  ')
+}
+
+/**
+ * Coerce a requested walk depth against the user's ceiling.
+ *
+ * The model gets the last word on *narrowing* the walk, the user gets the last
+ * word on widening it: no argument means the configured depth, an argument is
+ * clamped into `[1, ceiling]`. The ceiling is itself clamped to
+ * {@link SUBAGENT_DEPTH_CEILING}, so a hand-edited settings file cannot turn one
+ * call into a crawl either.
+ * @param value - the model's `depth` argument, if any.
+ * @param ceiling - the configured depth (`settings.subagentDepth`).
+ * @returns a whole number in `[1, ceiling]`.
+ */
+function depthWithin(value, ceiling) {
+  const top = Number.isFinite(ceiling)
+    ? Math.min(SUBAGENT_DEPTH_CEILING, Math.max(1, Math.trunc(ceiling)))
+    : SUBAGENT_DEFAULT_DEPTH
+  const number = typeof value === 'string' ? Number(value.trim()) : value
+  if (typeof number !== 'number' || !Number.isFinite(number)) return top
+  return Math.min(top, Math.max(1, Math.trunc(number)))
+}
+
+/**
+ * Read the parent's durable child catalog, keeping only the rows a read may
+ * address.
+ *
+ * `listDescendants` already walks nested catalogs without loading Agents, so the
+ * depth cut happens here rather than in a second traversal. Rows are the only
+ * source of truth for "which subagent exists": an id the main session never
+ * spawned can never be matched, which is also what keeps this tool from reading
+ * an unrelated Session.
+ * @param subagents - the Host subagent runtime.
+ * @param parentSessionId - the main Session that delegated.
+ * @param depth - how many edges to walk; 1 means direct children only.
+ * @param signal - cancellation forwarded to the catalog read.
+ * @returns the readable rows, and the diagnostics worth reporting.
+ */
+async function listSubagentRows(subagents, parentSessionId, depth, signal) {
+  const entries = await subagents.listDescendants(parentSessionId, signal)
+  const rows = []
+  const broken = []
+  for (const entry of entries ?? []) {
+    if (entry === null || typeof entry !== 'object') continue
+    if (entry.kind === 'diagnostic') {
+      broken.push(entry)
+      continue
+    }
+    if (entry.kind !== 'child') continue
+    if (typeof entry.depth !== 'number' || entry.depth < 1 || entry.depth > depth) continue
+    rows.push(entry)
+  }
+  return { rows, broken }
+}
+
+/**
+ * Resolve one written selector — a full id, an id prefix or a label — against the
+ * rows a listing just produced.
+ * @param rows - the readable catalog rows.
+ * @param selector - what the model asked for, already trimmed.
+ * @returns `{entry}` on one match, `{ambiguous}` on several, `{}` on none.
+ */
+function pickSubagent(rows, selector) {
+  const wanted = selector.toLowerCase()
+  const byId = rows.find((entry) => String(entry.id).toLowerCase() === wanted)
+  if (byId !== undefined) return { entry: byId }
+  if (wanted.length >= 4) {
+    const byPrefix = rows.filter((entry) => String(entry.id).toLowerCase().startsWith(wanted))
+    if (byPrefix.length === 1) return { entry: byPrefix[0] }
+    if (byPrefix.length > 1) return { ambiguous: byPrefix }
+  }
+  const byLabel = rows.filter((entry) => String(entry.label ?? '').toLowerCase() === wanted)
+  if (byLabel.length === 1) return { entry: byLabel[0] }
+  const contains = rows.filter((entry) => String(entry.label ?? '').toLowerCase().includes(wanted))
+  if (contains.length === 1) return { entry: contains[0] }
+  if (contains.length > 1) return { ambiguous: contains }
+  return {}
+}
+
+/**
+ * Fold one child Session's finished steps with the same folding the main digest
+ * uses, so a subagent's steps read exactly like the parent's.
+ *
+ * The blocks and timeline arrays are kept only because `foldProgress` fills them;
+ * this record is thrown away after one answer.
+ * @param sessionQuery - the Host session query service.
+ * @param childId - the subagent's durable session id.
+ * @param signal - cancellation forwarded to the observation.
+ * @returns a digest-shaped record whose `steps` are the child's own steps.
+ */
+async function foldSubagentSteps(sessionQuery, childId, signal) {
+  const observation = await sessionQuery.observeSession(childId, { signal, projectionMode: 'none' })
+  const record = { steps: [], blocks: [], timeline: [], pending: [], turn: undefined, step: undefined }
+  const budgets = { steps: 0, timelineChars: 0 }
+  for (const event of [...observation.events ?? []]) foldProgress(record, event, budgets)
+  return record
+}
+
+/**
+ * The subagent tool: list what the main session delegated, or read one of them.
+ *
+ * The main digest only ever sees a delegation as one tool call — the child's
+ * own reasoning and tools live in the child's Session — so this is the one way
+ * "what is that subagent doing" can be answered from evidence instead of the
+ * delegation prompt.
+ * @param record - the child's digest state; carries the parent Session id.
+ * @param services - `subagents`, `sessionQuery`, the live `subagentDepth`
+ *   setting and the Host `warn`.
+ * @returns the tool definition, ready for `tools.register`.
+ */
+function readSubagentTool(record, services) {
+  return {
+    name: READ_SUBAGENT_TOOL,
+    description:
+      'List the subagents the main session spawned, or read one of them as steps. The main session\'s own index shows only that it delegated; a subagent\'s reasoning, tool calls and conclusions live in its own session and only this tool can see them. Without `subagent` it returns the list (label, short id, running or inactive, depth), walking as many levels as the side assistant\'s own depth setting allows (default ' +
+      String(SUBAGENT_DEFAULT_DEPTH) +
+      ', at most ' +
+      String(SUBAGENT_DEPTH_CEILING) +
+      '). With `subagent` set to an id, an id prefix or a label it returns that subagent\'s steps, at most ' +
+      String(READ_STEPS_LIMIT) +
+      ' at a time, narrowed by `from`/`to`/`query`.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        subagent: {
+          type: 'string',
+          description: 'Id, id prefix or label of the subagent to read. Omit to list them instead.',
+        },
+        depth: {
+          type: 'integer',
+          minimum: 1,
+          maximum: SUBAGENT_DEPTH_CEILING,
+          description: 'How many delegation levels to list or match, up to the depth set in the side assistant\'s settings. Omit to use that setting.',
+        },
+        from: {
+          type: 'integer',
+          description: 'First step number to return, inclusive. Omit for no lower bound.',
+        },
+        to: {
+          type: 'integer',
+          description: 'Last step number to return, inclusive. Omit for no upper bound.',
+        },
+        query: {
+          type: 'string',
+          description: 'Case-insensitive keyword; only steps whose tools, reasoning or conclusion contain it are returned.',
+        },
+      },
+      required: [],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          text: { type: 'string' },
+          steps: { type: 'integer' },
+        },
+        required: ['text', 'steps'],
+      },
+      render: (args, value) => [{ type: 'text', text: String(value?.text ?? '') }],
+    },
+    async execute(args, exec) {
+      const subagents = services.subagents
+      const sessionQuery = services.sessionQuery
+      const parentSessionId = record?.parentSessionId
+      if (subagents === undefined || typeof subagents.listDescendants !== 'function') {
+        return { text: 'Subagent discovery is not available in this composition, so the main session cannot have spawned one.', steps: 0 }
+      }
+      const ceiling = typeof services.subagentDepth === 'function' ? services.subagentDepth() : SUBAGENT_DEFAULT_DEPTH
+      const depth = depthWithin(args?.depth, ceiling)
+      let listed
+      try {
+        listed = await listSubagentRows(subagents, parentSessionId, depth, exec?.signal)
+      } catch (error) {
+        return { text: `Could not list the main session\'s subagents: ${messageOf(error)}`, steps: 0 }
+      }
+      const broken = listed.broken.map((entry) => `  ${shortId(entry.id)} unreadable (${String(entry.reason ?? 'unknown')})`)
+      if (listed.rows.length === 0) {
+        const lines = ['The main session has not spawned a subagent in this conversation.']
+        if (broken.length > 0) lines.push('Some child catalogs could not be read:', ...broken)
+        return { text: lines.join('\n'), steps: 0 }
+      }
+      const selector = typeof args?.subagent === 'string' ? args.subagent.trim() : ''
+      if (selector === '') {
+        const reach = depth < ceiling ? `; it can walk to ${String(ceiling)} levels, pass \`depth: ${String(ceiling)}\` to include them` : ''
+        const lines = [`Subagents the main session spawned (${String(listed.rows.length)}, depth ≤ ${String(depth)}${reach}), oldest first:`]
+        for (const entry of listed.rows) lines.push(`  ${subagentLine(entry)}`)
+        lines.push('Call this tool again with `subagent` set to one of those ids or labels to read that subagent\'s own steps.')
+        if (broken.length > 0) lines.push('Some child catalogs could not be read:', ...broken)
+        return { text: lines.join('\n'), steps: 0 }
+      }
+      const picked = pickSubagent(listed.rows, selector)
+      if (picked.ambiguous !== undefined) {
+        return { text: `More than one subagent matches \`${selector}\`: ${picked.ambiguous.map(subagentLine).join(' | ')}. Use the id.`, steps: 0 }
+      }
+      if (picked.entry === undefined) {
+        const known = listed.rows.map((entry) => (entry.label === undefined ? shortId(entry.id) : `${shortId(entry.id)} (${entry.label})`)).join(', ')
+        return { text: `No subagent matches \`${selector}\`. Known: ${known}.`, steps: 0 }
+      }
+      if (sessionQuery === undefined || typeof sessionQuery.observeSession !== 'function') {
+        return { text: `Found the subagent \`${shortId(picked.entry.id)}\`, but its session cannot be read in this composition.`, steps: 0 }
+      }
+      let child
+      try {
+        child = await foldSubagentSteps(sessionQuery, picked.entry.id, exec?.signal)
+      } catch (error) {
+        return { text: `Could not read subagent \`${shortId(picked.entry.id)}\`: ${messageOf(error)}`, steps: 0 }
+      }
+      const answer = readSteps(child, args)
+      const label = String(picked.entry.label ?? '') === '' ? shortId(picked.entry.id) : String(picked.entry.label)
+      const head = `Subagent \`${label}\` (${shortId(picked.entry.id)}, ${String(picked.entry.activity ?? 'unknown')}, depth ${String(picked.entry.depth ?? SUBAGENT_DEFAULT_DEPTH)}), oldest first:`
+      return { text: `${head}\n${answer.text}`, steps: answer.steps }
+    },
+  }
+}
+
 /** How long ago in the shortest form that still reads as time; `''` when unknown. */
 function agoText(ms) {
   if (!Number.isFinite(ms) || ms < 0) return ''
@@ -1024,24 +1286,30 @@ const stepTools = new WeakSet()
  * @param warn - the Host logger, threaded in because this helper lives outside `apply`.
  * @returns nothing.
  */
-function attachTools(agent, record, jobs, warn) {
+function attachTools(agent, record, services) {
   if (agent === null || typeof agent !== 'object' || stepTools.has(agent)) return
   const tools = agent.ctx?.get?.('tools')
   if (tools === undefined || typeof tools.register !== 'function') {
-    warn('side-assistant: the agent has no tools service; the step index and the job list have no drill-down tools')
+    services.warn('side-assistant: the agent has no tools service; the step index and the job list have no drill-down tools')
     return
   }
   stepTools.add(agent)
   try {
     tools.register(readStepsTool(record))
   } catch (error) {
-    warn(`side-assistant: could not register ${READ_STEPS_TOOL}: ${messageOf(error)}`)
+    services.warn(`side-assistant: could not register ${READ_STEPS_TOOL}: ${messageOf(error)}`)
   }
+  try {
+    tools.register(readSubagentTool(record, services))
+  } catch (error) {
+    services.warn(`side-assistant: could not register ${READ_SUBAGENT_TOOL}: ${messageOf(error)}`)
+  }
+  const jobs = services.jobs
   if (jobs === undefined || typeof jobs.readAt !== 'function') return
   try {
     tools.register(readJobTool(record, jobs))
   } catch (error) {
-    warn(`side-assistant: could not register ${READ_JOB_TOOL}: ${messageOf(error)}`)
+    services.warn(`side-assistant: could not register ${READ_JOB_TOOL}: ${messageOf(error)}`)
   }
 }
 
@@ -1087,6 +1355,7 @@ function renderProgress(record) {
   lines.push('')
   lines.push('When the user asks what the main agent is doing now: walk the newest full blocks above oldest to newest, one sentence each saying what it got done (use the conclusion in the block; do not quote the reasoning back), then say that nothing newer has arrived after the newest block; with a single block, only that one.')
   lines.push(`When the user asks about an earlier step, a range of steps, or something specific ("which step touched client.js?"): call the tool \`${READ_STEPS_TOOL}\` with a \`from\`/\`to\` range or a \`query\` keyword, and answer from what it returns. An index line names the tools and the conclusion but not the files, the reasoning or whether it worked, so do not answer those parts from it alone.`)
+  lines.push(`When a step delegated work (a subagent tool call, a spawned child), that child's reasoning and tools are NOT in this index: call \`${READ_SUBAGENT_TOOL}\` with no arguments to list what the main session spawned, then with its id or label to read that subagent's own steps. Say it is a subagent's step, not the main agent's.`)
   if (timeline.length > 0) {
     lines.push(`The index reaches back to step ${String(timeline[0].step ?? 'the oldest one it lists')}. Below that, read steps with \`${READ_STEPS_TOOL}\` when it says it still keeps them; anything it no longer keeps was never handed to you, so say so rather than guessing, and never invent a step number.`)
   }
@@ -1313,7 +1582,13 @@ export function apply(ctx, config) {
         warn(`side-assistant: could not attach the job list: ${messageOf(error)}`)
       }
     }
-    attachTools(agent, record, jobs, warn)
+    attachTools(agent, record, {
+      jobs,
+      subagents: ctx.subagents,
+      sessionQuery: ctx.sessionQuery,
+      subagentDepth: () => settings.subagentDepth,
+      warn,
+    })
     try {
       prompt.context({
         name: PROGRESS_CONTEXT_NAME,

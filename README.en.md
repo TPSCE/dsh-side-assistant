@@ -18,7 +18,7 @@ A side assistant **is not a subagent**: it never appears in the subagent catalog
 | --- | --- |
 | A side conversation pane with an input and a message stream | Carried by this plugin's own tab type; the chat itself is DSH's `conversation.content` factory (`embedded` variant) |
 | **Seeing the main Agent's live progress (tool calls + chain of thought)** | A progress strip drawn at the top of the pane; `session.follow` reads the main Session's event stream and assistant stream directly |
-| **An overview of tens or hundreds of steps, with drill-down** | The prompt carries one index line per step (tools + target + status + conclusion), the newest steps in full, and the assistant's own `side_assistant_read_steps` tool fetches anything older |
+| **An overview of tens or hundreds of steps, with drill-down** | The prompt carries one index line per step (tools + target + status + conclusion), the newest steps in full, and the assistant's own `side_assistant_read_steps` tool fetches anything older; a subagent's own steps come from `side_assistant_read_subagent` (1 level by default, 2 at most) |
 | **The side assistant also learns what happened afterwards** | When the main Agent finishes a step, the Host folds that step into a block and writes it into the side assistant's system-prompt fragment (`side-assistant:progress`) — never into the chat log |
 | **Knowing the history the main Session already finished** | At creation the main Session's completed turns are folded into a summary and mounted as the prompt context `side-assistant:history` (order 120) — the assistant's own log starts at the greeting, so the pane shows no copy of the main conversation |
 | Asking again and again (a persistent assistant) | The Session carries its own `subagent/descriptor`; every question cold-resumes it, and the record stays |
@@ -238,6 +238,18 @@ bash-2  completed  pnpm build  exit code: 0  took 34s
 
 Boundaries: **interactive terminals** in the sidebar are not in the job registry and the Host has no service that lists them, so they are not visible here; subagent jobs do show up as `subagent-N`, but their product goes to the child Session log rather than the output ring, so the tail reads empty.
 
+### Subagents: reading their own steps
+
+When the main Agent delegates, the progress index keeps one line for it (`subagent:check the settings page (done)`) — the child's reasoning and tool calls live in its own Session log, not in the parent's event stream. So the Host ships a third tool, `side_assistant_read_subagent`:
+
+- **No arguments**: list the subagents the main session spawned — label, id, `running` / `inactive`, depth. How many levels it walks is the **subagent recursion depth** setting (default 1, i.e. direct children only).
+- **`depth: n`**: the model may **narrow** the walk (set the setting to 3 and pass `1` to see only direct children this time) but never widen it past the setting — the ceiling stays with the Host, so one call cannot turn into a crawl, and the setting itself is clamped to 1..5.
+- **With `subagent`** (full id, an id prefix of at least 4 characters, or a label) plus optional `from` / `to` / `query`: return **that subagent's own steps**, in exactly the same shape as the main session's drill-down (tools, conclusion, reasoning, what it wrote), at most 40 steps / 8000 characters per call.
+
+It reads as an **on-demand snapshot**: the child's Session log is folded when the tool is called, and the Host keeps no resident record per subagent — so the children cost the assistant no memory no matter how many steps they take, and a running subagent can already be read for the steps it has **finished** (the one being written still waits for its own close).
+
+Authorization rides the same path: an id is only read if the main session's catalog lists it, which is why this tool cannot reach an unrelated Session; when a branch of the catalog is unreadable the answer says which line it could not read instead of pretending it does not exist.
+
 ### Deleting an assistant: in the menu, archive first, then close the tab
 
 The delete control lives next to the thing it deletes: press the header button again to open the menu and every `助手 N` row has a **Delete** on its right — two characters, paid for out of the row's width instead of the progress strip, and no "which assistant does the button at the right end delete?" to remember. The label follows the system language (`删除` in `zh`, `Delete` in `en`).
@@ -288,6 +300,7 @@ Nothing restarts when you save; assistants you open afterwards work the new way.
 | Test connection | — | Makes one real, tiny request (`maxTokens ≤ 16`) and reports the round trip and the provider/model actually used. A configuration that resolves is not a configuration that works; only the wire proves it |
 | Full steps kept | 5 | 1..50; older steps fold into one line each |
 | Context budget (tokens) | 2000 | 500..200 000; one token buys roughly three characters of index and two of history summary |
+| Subagent recursion depth | 1 | 1..5; how many delegation levels `side_assistant_read_subagent` may walk. 1 means direct children only, and the model can narrow the walk but never widen it past this |
 | Answer style | Brief | **Brief** is a sentence or two; **Detailed** explains what each step did, why, and which files moved |
 | Name / greeting | 侧边助手 / hello | Only affects assistants created afterwards |
 
@@ -399,6 +412,7 @@ Host  index.js                              Browser  client.js
 21. **Settings are the plugin's own file, not a DSH settings namespace.** `~/.dsh/storages/side-assistant/settings.json` is read and written by the plugin itself (`GET`/`POST /side-assistant/settings`), so a save takes effect without a restart and never appears in a `dsh config` style view. Three consequences are worth knowing: the name and greeting are written into the descriptor of **newly created** sessions, so changing them only affects assistants created afterwards; the full-step count only affects folding from then on (lines already folded are not expanded again); and **a custom endpoint is written as the `llm-pi-ai` provider `side-assistant-custom`**, so it also shows up in Settings → Models — it is the same kind of thing as a hand-added provider, and it is removed from there too.
 22. **Test connection really sends a request** (`maxTokens ≤ 16`), so it proves "this route works", not "this configuration is syntactically valid". In follow-the-main-session mode there is no definite provider/model, and the button says so instead of guessing.
 23. **The answer style is the only live setting.** It rides the prompt context `side-assistant:style` (order 118), so the next `agent/created` picks it up — existing assistants start answering in the new style immediately. Everything else is either fixed at creation or only affects later folding.
+24. **Subagents are read on demand, two levels at most.** `side_assistant_read_subagent` folds the child's Session log on every call (nothing resident), so the parent index line "delegated to X" and X's own steps are two separate pieces of information — the former never expands into the latter by itself. Anything deeper than 2 levels is not walked; the child has to say so in its own steps. When a child is archived or its log cannot be read, the tool returns the reason rather than an empty list.
 
 ## Tests
 

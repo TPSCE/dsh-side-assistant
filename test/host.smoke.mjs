@@ -84,6 +84,7 @@ function mount(config) {
   const routes = new Map()
   const calls = {
     listChildren: 0,
+    listDescendants: 0,
     listSessions: 0,
     observeSession: 0,
     create: 0,
@@ -243,6 +244,8 @@ function mount(config) {
       records: [],
       /** The main Session's own events, as one observation. */
       events: [],
+      /** Other Sessions a test wants readable, keyed by id (a subagent's log). */
+      bySession: new Map(),
       async listSessions(signal) {
         calls.listSessions += 1
         assert.ok(signal instanceof AbortSignal, 'listSessions must receive the lifetime signal')
@@ -253,16 +256,24 @@ function mount(config) {
         calls.lastObserved = sessionId
         assert.ok(options.signal instanceof AbortSignal, 'observeSession must receive the lifetime signal')
         assert.equal(options.projectionMode, 'none')
-        return { header: { id: sessionId }, events: ctx.sessionQuery.events }
+        const own = ctx.sessionQuery.bySession.get(sessionId)
+        return { header: { id: sessionId }, events: own ?? ctx.sessionQuery.events }
       },
     },
     subagents: {
       children: [],
+      /** Recursive catalog rows a subagent test wants listed. */
+      descendants: [],
       async listChildren(parentSessionId, signal) {
         calls.listChildren += 1
         assert.equal(typeof parentSessionId, 'string')
         assert.ok(signal instanceof AbortSignal, 'listChildren must receive the lifetime signal')
         return ctx.subagents.children
+      },
+      async listDescendants(rootSessionId, signal) {
+        calls.listDescendants += 1
+        assert.equal(rootSessionId, parent.session.header.id)
+        return ctx.subagents.descendants
       },
     },
   }
@@ -1235,7 +1246,7 @@ test('with no job registry, the prompt says nothing about jobs', async () => {
   const live = resumable(calls.lastCreate.sessionId)
   ctx.emit('agent/created', { agent: live.agent })
   assert.equal(live.attached.some((entry) => entry.name === 'side-assistant:jobs'), false)
-  assert.deepEqual(live.toolNames, ['side_assistant_read_steps'], 'no job tool without a registry')
+  assert.deepEqual(live.toolNames, ['side_assistant_read_steps', 'side_assistant_read_subagent'], 'no job tool without a registry')
 })
 
 test('the drill-down tool answers for one step, and only in the child’s own tool layer', async () => {
@@ -1244,7 +1255,7 @@ test('the drill-down tool answers for one step, and only in the child’s own to
   const live = resumable(calls.lastCreate.sessionId)
   ctx.emit('agent/created', { agent: live.agent })
 
-  assert.deepEqual(live.toolNames, ['side_assistant_read_steps'], 'registered once, in the child scope')
+  assert.deepEqual(live.toolNames, ['side_assistant_read_steps', 'side_assistant_read_subagent'], 'registered once, in the child scope')
   for (let step = 1; step <= 7; step += 1) {
     ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', step, {
       turn: 1,
@@ -1286,6 +1297,133 @@ test('the drill-down tool answers for one step, and only in the child’s own to
   const none = await tool.execute({ query: 'nothing like this' })
   assert.equal(none.steps, 0)
   assert.match(none.text, /Steps still kept: 1\.\.7/, 'it names the range it still holds')
+})
+
+test('the subagent tool lists what the parent spawned, one level deep by default', async () => {
+  freshHome()
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+  const catalog = [
+    { kind: 'child', id: 'sub-1111-aaaa', mode: 'continuable', activity: 'inactive', label: '检查设置页', depth: 1, parentId: 's1', hasChildren: true },
+    { kind: 'child', id: 'sub-2222-bbbb', mode: 'continuable', activity: 'running', label: '改测试', depth: 2, parentId: 'sub-1111-aaaa', hasChildren: false },
+    { kind: 'diagnostic', id: 'sub-3333-cccc', reason: 'unavailable' },
+  ]
+  ctx.subagents.descendants = catalog
+  const tool = live.tools.get('side_assistant_read_subagent')
+  assert.ok(tool !== undefined, 'the subagent tool is registered next to the drill-down')
+  assert.equal(tool.parameters?.type, 'object', 'parameters is object-rooted JSON Schema')
+  assert.equal(tool.parameters.properties?.subagent?.type, 'string')
+  assert.equal(tool.parameters.properties?.depth?.maximum, 5, 'the schema allows the widest setting')
+  assert.deepEqual(tool.output.schema.required, ['text', 'steps'])
+
+  const signal = new AbortController().signal
+  const listed = await tool.execute({}, { signal })
+  assert.equal(listed.steps, 0)
+  assert.match(listed.text, /检查设置页/, 'a direct child is listed with its label')
+  assert.match(listed.text, /sub-1111/, 'and its id, so it can be addressed')
+  assert.match(listed.text, /depth ≤ 1/, 'the shipped setting walks one level')
+  assert.doesNotMatch(listed.text, /改测试/, 'depth 1 does not walk into grandchildren')
+  assert.doesNotMatch(listed.text, /pass `depth:/, 'nothing to offer when the setting is 1')
+  assert.match(listed.text, /unreadable/, 'a broken child catalog is reported, not hidden')
+
+  // The setting decides how deep a call may go: raise it, and the same call
+  // (no argument) now walks two levels without the model asking.
+  const raised = await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { ...PATHS.settings, subagentDepth: 2 } },
+  })
+  assert.equal(raised.status, 200)
+  const deeper = await tool.execute({}, { signal })
+  assert.match(deeper.text, /depth ≤ 2/, 'the raised setting is what an argument-less call uses')
+  assert.match(deeper.text, /改测试/, 'grandchildren are listed once the setting allows them')
+
+  const clamped = await tool.execute({ depth: 9 }, { signal })
+  assert.match(clamped.text, /depth ≤ 2/, 'a depth beyond the setting is clamped, never walked')
+  const lower = await tool.execute({ depth: 1 }, { signal })
+  assert.doesNotMatch(lower.text, /改测试/, 'the model can still narrow below the setting')
+})
+
+test('the depth setting is clamped into its own range', async () => {
+  freshHome()
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+  const tool = live.tools.get('side_assistant_read_subagent')
+  const signal = new AbortController().signal
+  ctx.subagents.descendants = [
+    { kind: 'child', id: 'sub-1111-aaaa', mode: 'continuable', activity: 'inactive', label: '检查设置页', depth: 1, parentId: 's1', hasChildren: true },
+  ]
+  const saved = await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { ...PATHS.settings, subagentDepth: 99 } },
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(saved.json.settings.subagentDepth, 5, 'a hand-set 99 lands on the ceiling')
+  const answer = await tool.execute({}, { signal })
+  assert.match(answer.text, /depth ≤ 5/)
+  const broken = await request(getRoute('/side-assistant/settings'), {
+    body: { settings: { ...PATHS.settings, subagentDepth: 0 } },
+  })
+  assert.equal(broken.json.settings.subagentDepth, 1, 'zero lands on the floor')
+})
+
+test('a subagent is read as its own steps, never as the parent’s', async () => {
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+  // The parent has steps of its own; a subagent read must not touch them.
+  ctx.emit('session/event', { id: 's1' }, parentEvent('assistant/message', 1, {
+    turn: 1,
+    step: 1,
+    stream: stepStream({ thought: 'parent thinking', text: 'parent answer' }),
+  }))
+  ctx.subagents.descendants = [
+    { kind: 'child', id: 'sub-1111-aaaa', mode: 'continuable', activity: 'running', label: '检查设置页', depth: 1, parentId: 's1', hasChildren: false },
+  ]
+  ctx.sessionQuery.bySession.set('sub-1111-aaaa', [
+    { type: 'tool/call', seq: 1, data: { callId: 'k1', name: 'read', arguments: '{"path":"settings.json"}' } },
+    { type: 'tool/result', seq: 2, data: { callId: 'k1', isError: false } },
+    {
+      type: 'assistant/message',
+      seq: 3,
+      data: { turn: 1, step: 1, stream: stepStream({ thought: 'look at the file', text: 'The settings file exists.' }) },
+    },
+  ])
+  const signal = new AbortController().signal
+  const tool = live.tools.get('side_assistant_read_subagent')
+
+  const answer = await tool.execute({ subagent: '检查设置页' }, { signal })
+  assert.equal(answer.steps, 1)
+  assert.match(answer.text, /Subagent `检查设置页` \(sub-1111, running, depth 1\)/)
+  assert.match(answer.text, /did: read: \{"path":"settings.json"\} \(done\)/)
+  assert.match(answer.text, /said: The settings file exists\./)
+  assert.doesNotMatch(answer.text, /parent answer/, 'the parent log is not what a child read returns')
+
+  const prefix = await tool.execute({ subagent: 'sub-11' }, { signal })
+  assert.equal(prefix.steps, 1, 'an id prefix addresses the same child')
+
+  const narrowed = await tool.execute({ subagent: 'sub-1111-aaaa', query: 'nothing like this' }, { signal })
+  assert.equal(narrowed.steps, 0)
+  assert.match(narrowed.text, /Steps still kept: 1\.\.1/, 'the answer still names the range the child holds')
+
+  const unknown = await tool.execute({ subagent: 'nope' }, { signal })
+  assert.equal(unknown.steps, 0)
+  assert.match(unknown.text, /No subagent matches/)
+  assert.match(unknown.text, /Known: sub-1111 \(检查设置页\)/)
+})
+
+test('with no subagents spawned, the tool says so instead of inventing one', async () => {
+  const { ctx, calls, getRoute } = mount(PATHS)
+  await request(getRoute(), { body: { sessionId: 's1' } })
+  const live = resumable(calls.lastCreate.sessionId)
+  ctx.emit('agent/created', { agent: live.agent })
+  const tool = live.tools.get('side_assistant_read_subagent')
+  const empty = await tool.execute({}, { signal: new AbortController().signal })
+  assert.equal(empty.steps, 0)
+  assert.match(empty.text, /has not spawned a subagent/)
+  assert.equal(calls.listDescendants, 1)
 })
 
 test('the timeline is bounded on characters, oldest lines leaving first', async () => {
@@ -1414,11 +1552,12 @@ test('the settings route answers the shipped document with no secret in it', asy
   const result = await request(getRoute('/side-assistant/settings'), { method: 'GET' })
   assert.equal(result.status, 200)
   assert.equal(result.json.ok, true)
-  assert.deepEqual(result.json.limits, { steps: [1, 50], tokens: [500, 200000] })
+  assert.deepEqual(result.json.limits, { steps: [1, 50], tokens: [500, 200000], subagentDepth: [1, 5] })
   assert.equal(result.json.settings.label, PATHS.label)
   assert.equal(result.json.settings.opener, 'hello')
   assert.equal(result.json.settings.steps, 5)
   assert.equal(result.json.settings.tokens, 2000)
+  assert.equal(result.json.settings.subagentDepth, 1, 'one level out of the box')
   assert.equal(result.json.settings.style, 'brief')
   assert.equal(result.json.settings.modelMode, 'inherit')
   assert.equal(result.json.keyConfigured, false)
